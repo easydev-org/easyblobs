@@ -1,0 +1,267 @@
+// Package helm implements the Helm chart repository protocol (index.yaml with
+// local entries merged + upstream overlay, chart download with pull-through,
+// chart upload) mirroring the pkglab reference.
+package helm
+
+import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"context"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+
+	"github.com/easydev-org/easyblobs/core"
+)
+
+type State struct {
+	Registry *easyblobkit.Registry
+	Auth     easyblobkit.Auth
+	SelfBase string
+}
+
+func NewHandler(reg *easyblobkit.Registry, cfg map[string]any) (http.Handler, error) {
+	s := &State{Registry: reg}
+	if a, ok := cfg["auth"].(easyblobkit.Auth); ok {
+		s.Auth = a
+	}
+	if v, ok := cfg["self_base"].(string); ok {
+		s.SelfBase = v
+	}
+	return s, nil
+}
+
+func init() { easyblobkit.Register("helm", NewHandler) }
+
+func (s *State) base() string { return easyblobkit.SelfURL(s.SelfBase, "helm") }
+
+func (s *State) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/artifacts/helm")
+	path = strings.TrimPrefix(path, "/helm")
+	path = strings.Trim(path, "/")
+
+	switch {
+	case path == "index.yaml":
+		if s.indexYaml(w, r) {
+			return
+		}
+		easyblobkit.Error(w, http.StatusNotFound, "not found")
+	case strings.HasPrefix(path, "charts/"):
+		s.chart(w, r, strings.TrimPrefix(path, "charts/"))
+	case path == "api/charts":
+		if r.Method == http.MethodPost || r.Method == http.MethodPut {
+			s.upload(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	case strings.HasPrefix(path, "api/charts/"):
+		s.deleteChart(w, r, strings.TrimPrefix(path, "api/charts/"))
+	default:
+		easyblobkit.Error(w, http.StatusNotFound, "not found")
+	}
+}
+
+func (s *State) indexYaml(w http.ResponseWriter, r *http.Request) bool {
+	var out strings.Builder
+	out.WriteString("apiVersion: v1\nentries:\n")
+	repos, _ := s.Registry.Meta.ListRepositoriesByFormat(r.Context(), "helm")
+	for _, name := range repos {
+		versions, _ := s.Registry.Meta.ListVersions(r.Context(), "helm", name)
+		if len(versions) == 0 {
+			continue
+		}
+		out.WriteString("  " + name + ":\n")
+		for _, v := range versions {
+			art, err := s.Registry.Meta.Get(r.Context(), "helm", name, v)
+			if err != nil {
+				continue
+			}
+			fname, digest := name+"-"+v+".tgz", ""
+			if len(art.Blobs) > 0 {
+				fname, digest = art.Blobs[0].Name, art.Blobs[0].Hex()
+			}
+			out.WriteString("    - apiVersion: v2\n      name: " + name + "\n      version: " + v +
+				"\n      urls:\n        - " + s.base() + "/charts/" + fname +
+				"\n      created: 2024-01-01T00:00:00Z\n      digest: " + digest + "\n")
+		}
+	}
+	// Merge upstream index so public charts pull through.
+	if remote, err := s.Registry.Remote(r.Context(), easyblobkit.UpstreamSpec{Format: "helm"}); err == nil {
+		if body, err := remote.GetBytes(r.Context(), "/index.yaml"); err == nil {
+			text := string(body)
+			if idx := strings.Index(text, "entries:"); idx >= 0 {
+				rewritten := strings.ReplaceAll(text[idx+len("entries:"):],
+					"https://charts.helm.sh/stable/packages/", s.base()+"/charts/")
+				out.WriteString(rewritten)
+			}
+		}
+	}
+	easyblobkit.Text(w, http.StatusOK, out.String(), "application/yaml")
+	return true
+}
+
+func (s *State) chart(w http.ResponseWriter, r *http.Request, filename string) {
+	repos, _ := s.Registry.Meta.ListRepositoriesByFormat(r.Context(), "helm")
+	for _, name := range repos {
+		versions, _ := s.Registry.Meta.ListVersions(r.Context(), "helm", name)
+		for _, v := range versions {
+			art, err := s.Registry.Meta.Get(r.Context(), "helm", name, v)
+			if err != nil {
+				continue
+			}
+			for _, b := range art.Blobs {
+				if b.Name == filename {
+					if easyblobkit.ServeBlobAtNamed(w, r, s.Registry.Blobs, r.Context(), b.Digest, "application/octet-stream", filename) {
+						return
+					}
+				}
+			}
+		}
+	}
+	// Pull-through.
+	remote, _ := s.Registry.Remote(r.Context(), easyblobkit.UpstreamSpec{Format: "helm"})
+	if remote != nil {
+		if body, err := remote.GetBytes(r.Context(), "/packages/"+filename); err == nil {
+			easyblobkit.ServeData(w, r, s.Registry, r.Context(), body, "application/octet-stream", filename)
+			return
+		} else {
+			easyblobkit.WriteUpstreamError(w, err)
+			return
+		}
+	}
+	easyblobkit.Error(w, http.StatusNotFound, "chart not found")
+}
+
+func (s *State) upload(w http.ResponseWriter, r *http.Request) {
+	if !easyblobkit.AuthorizeWriteScoped(w, r, s.Auth, s.Registry, "helm") {
+		return
+	}
+	easyblobkit.LimitBody(w, r)
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		easyblobkit.WriteReadErr(w, err)
+		return
+	}
+	ct := r.Header.Get("Content-Type")
+	var fname string
+	if strings.HasPrefix(ct, "multipart/form-data") {
+		fname, data, _ = easyblobkit.ExtractFirstFile(data, ct)
+	}
+	if len(data) == 0 {
+		data = bodyOf(w, r)
+	}
+	name, version := queryPair(r.URL.Query(), "name"), queryPair(r.URL.Query(), "version")
+	if name == "" || version == "" {
+		if cn, cv, ok := chartNameVersion(data); ok {
+			if name == "" {
+				name = cn
+			}
+			if version == "" {
+				version = cv
+			}
+		}
+	}
+	if name == "" {
+		name = "unknown"
+	}
+	if version == "" {
+		version = "0.1.0"
+	}
+	// chartmuseum's push (the only client that PUTs here) sends the file with
+	// its client-local temp path as the filename; the index URL must reference
+	// a bare "<chart>-<version>.tgz".
+	fname = name + "-" + version + ".tgz"
+	storeChart(s.Registry, name, version, fname, data, r.Context())
+	easyblobkit.JSON(w, http.StatusCreated, map[string]any{"saved": true})
+}
+
+func (s *State) deleteChart(w http.ResponseWriter, r *http.Request, rest string) {
+	if r.Method != http.MethodDelete {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if !easyblobkit.AuthorizeWriteScoped(w, r, s.Auth, s.Registry, "helm") {
+		return
+	}
+	parts := strings.Split(rest, "/")
+	name := parts[0]
+	if len(parts) >= 2 {
+		removeVersion(s.Registry, name, parts[1], r.Context())
+	} else {
+		vs, _ := s.Registry.Meta.ListVersions(r.Context(), "helm", name)
+		for _, v := range vs {
+			removeVersion(s.Registry, name, v, r.Context())
+		}
+	}
+	easyblobkit.JSON(w, http.StatusOK, map[string]any{"deleted": true})
+}
+
+func storeChart(reg *easyblobkit.Registry, name, version, filename string, data []byte, ctx context.Context) {
+	reg.StoreVersion(ctx, easyblobkit.VersionInput{
+		Format: "helm", Repository: name, Version: version,
+		Filename: filename, Data: data,
+	})
+}
+
+func removeVersion(reg *easyblobkit.Registry, name, version string, ctx context.Context) {
+	if art, err := reg.Meta.Get(ctx, "helm", name, version); err == nil {
+		for _, b := range art.Blobs {
+			easyblobkit.LogMetaErr("blob delete", reg.Blobs.Delete(ctx, b.Digest))
+		}
+	}
+	easyblobkit.LogMetaErr("meta delete", reg.Meta.Delete(ctx, "helm", name, version))
+}
+
+// chartNameVersion reads Chart.yaml (name/version) out of a chart .tgz.
+func chartNameVersion(data []byte) (string, string, bool) {
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return "", "", false
+	}
+	defer func() { _ = gz.Close() }()
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", "", false
+		}
+		if !strings.HasSuffix(hdr.Name, "Chart.yaml") {
+			continue
+		}
+		buf, _ := io.ReadAll(io.LimitReader(tr, 1<<20))
+		return yamlScalar(buf, "name"), yamlScalar(buf, "version"), true
+	}
+	return "", "", false
+}
+
+func yamlScalar(data []byte, key string) string {
+	prefix := key + ":"
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if rest, ok := strings.CutPrefix(line, prefix); ok {
+			return strings.Trim(strings.TrimSpace(rest), `"'`)
+		}
+	}
+	return ""
+}
+
+func queryPair(v url.Values, key string) string {
+	val := v.Get(key)
+	val = strings.ReplaceAll(val, "%20", " ")
+	return strings.ReplaceAll(val, "+", " ")
+}
+
+func bodyOf(w http.ResponseWriter, r *http.Request) []byte {
+	easyblobkit.LimitBody(w, r)
+	b, err := io.ReadAll(r.Body)
+	if err != nil {
+		easyblobkit.WriteReadErr(w, err)
+		return nil
+	}
+	return b
+}

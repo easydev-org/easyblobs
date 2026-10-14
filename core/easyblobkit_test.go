@@ -1,0 +1,165 @@
+package easyblobkit_test
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/easydev-org/easyblobs/core"
+	"github.com/easydev-org/easyblobs/core/store"
+)
+
+func TestFileBlobStoreDedupAndVerify(t *testing.T) {
+	blobs, err := store.NewFileBlobStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	data := []byte("hello artifact")
+	d := easyblobkit.DigestOf(data)
+	stored, ok, err := blobs.Put(ctx, strings.NewReader(string(data)), d)
+	if err != nil || !ok {
+		t.Fatalf("first put: %v ok=%v", err, ok)
+	}
+	if stored.Digest != d || stored.Size != int64(len(data)) {
+		t.Fatalf("stored = %+v", stored)
+	}
+	// Dedup: second put is a no-op.
+	if _, ok, err := blobs.Put(ctx, strings.NewReader(string(data)), d); err != nil || ok {
+		t.Fatalf("second put should dedup, ok=%v err=%v", ok, err)
+	}
+	info, err := blobs.Stat(ctx, d)
+	if err != nil || info == nil || info.Size != int64(len(data)) {
+		t.Fatalf("stat: %v %v", info, err)
+	}
+	// Mismatched digest must be rejected.
+	if _, _, err := blobs.Put(ctx, strings.NewReader(string(data)), "sha256:"+strings.Repeat("0", 64)); err == nil {
+		t.Fatal("expected digest mismatch")
+	}
+}
+
+// TestHashesSidecar verifies the store records the hash set at write time and
+// Hashes reads it back without touching the bytes.
+func TestHashesSidecar(t *testing.T) {
+	blobs, err := store.NewFileBlobStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	data := []byte("checksum me")
+	d := easyblobkit.DigestOf(data)
+
+	reg := &easyblobkit.Registry{Blobs: blobs}
+	stored, err := reg.StoreStream(ctx, strings.NewReader(string(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Digest != d {
+		t.Fatalf("digest = %s, want %s", stored.Digest, d)
+	}
+	// The recorded set is available without re-reading the blob.
+	got, ok, err := blobs.Hashes(ctx, d)
+	if err != nil || !ok {
+		t.Fatalf("Hashes: ok=%v err=%v", ok, err)
+	}
+	if got != stored.Hashes {
+		t.Fatalf("hashes = %+v, want %+v", got, stored.Hashes)
+	}
+	// List must not surface the sidecar as a phantom digest.
+	all, err := blobs.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 1 || all[0].Digest != d {
+		t.Fatalf("list = %v, want exactly [%s]", all, d)
+	}
+	// Deleting the blob removes the sidecar too.
+	if err := blobs.Delete(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := blobs.Hashes(ctx, d); ok {
+		t.Fatal("Hashes on a deleted blob should report absent")
+	}
+}
+
+func TestSQLiteStoreRoundtrip(t *testing.T) {
+	s, err := store.OpenSQLite(t.TempDir() + "/meta.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	ctx := context.Background()
+	art := easyblobkit.Artifact{
+		Format: "oci", Repository: "library/alpine", Version: "3",
+		MediaType:   "application/vnd.oci.image.manifest.v1+json",
+		Proprietary: []byte(`{"x":1}`), Digest: "sha256:abc", Source: "push",
+	}
+	if err := s.Put(ctx, art); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(ctx, "oci", "library/alpine", "3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Digest != art.Digest || got.Version != "3" {
+		t.Fatalf("roundtrip mismatch: %+v", got)
+	}
+	versions, _ := s.ListVersions(ctx, "oci", "library/alpine")
+	if len(versions) != 1 || versions[0] != "3" {
+		t.Fatalf("versions=%v", versions)
+	}
+	repos, _ := s.ListRepositoriesByFormat(ctx, "oci")
+	if len(repos) != 1 || repos[0] != "library/alpine" {
+		t.Fatalf("repos=%v", repos)
+	}
+	if err := s.Delete(ctx, "oci", "library/alpine", "3"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Get(ctx, "oci", "library/alpine", "3"); !errors.Is(err, easyblobkit.ErrArtifactUnknown) {
+		t.Fatalf("expected ErrArtifactUnknown, got %v", err)
+	}
+}
+
+func TestTokenAuth(t *testing.T) {
+	auth := easyblobkit.NewTokenAuth("devtoken=write,readtoken=read")
+	if _, ok := auth.CheckBearer(context.Background(), "devtoken", "repository:foo:pull"); !ok {
+		t.Fatal("write token should permit pull")
+	}
+	if _, ok := auth.CheckBearer(context.Background(), "readtoken", "repository:foo:push"); ok {
+		t.Fatal("read token should NOT permit push")
+	}
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.Header.Set("Authorization", "Bearer devtoken")
+	if u := auth.Authenticate(context.Background(), req); u == "" {
+		t.Fatal("bearer should authenticate")
+	}
+}
+
+func TestUpstreamsProxyWalk(t *testing.T) {
+	u := &easyblobkit.Upstreams{Proxy: map[string]string{"nuget.search": "http://p:1", "nuget": "http://p2:2"}}
+	if v, ok := u.ProxyURL("nuget.search"); !ok || v != "http://p:1" {
+		t.Fatalf("exact: %v %v", v, ok)
+	}
+	if v, ok := u.ProxyURL("nuget.registration"); !ok || v != "http://p2:2" {
+		t.Fatalf("parent walk: %v %v", v, ok)
+	}
+	if u.Get("npm") != "" || u.AirGap {
+		t.Fatal("unconfigured format should be empty (no defaults here)")
+	}
+}
+
+func TestMemCacheTTL(t *testing.T) {
+	c := easyblobkit.NewMemCache(20 * time.Millisecond)
+	c.Set("k", "v")
+	if v, ok := c.Get("k"); !ok || v != "v" {
+		t.Fatal("cache miss on fresh key")
+	}
+	time.Sleep(40 * time.Millisecond)
+	if _, ok := c.Get("k"); ok {
+		t.Fatal("cache should have expired")
+	}
+}

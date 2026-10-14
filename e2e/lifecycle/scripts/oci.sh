@@ -1,0 +1,52 @@
+#!/bin/sh
+# oci lifecycle: skopeo copy (push) / inspect public+private / upgrade / delete.
+# The artifact Service host IS the registry (docker clients carry the registry
+# in the Host header); the adapter maps it to the default upstream (Docker Hub).
+# Plain HTTP + no signature policy, so --tls-verify=false everywhere.
+set -e
+: "${EASYBLOBS_URL:?EASYBLOBS_URL not set}"
+REG="${EASYBLOBS_URL#*://}"      # strip scheme -> host[:port]
+REPO="$REG/lc-probe-${SUFFIX}"
+mkdir -p "$HOME/.config/containers"
+cat > "$HOME/.config/containers/policy.json" <<'X'
+{"default": [{"type": "insecureAcceptAnything"}]}
+X
+SKOPEO="skopeo --policy $HOME/.config/containers/policy.json --tls-verify=false"
+# Two distinct public images (through the same mirror) so v1/v2 differ.
+SRC_V1="docker://$REG/library/busybox:1.36"
+SRC_V2="docker://$REG/library/busybox:musl"
+
+case "$STAGE" in
+publish)
+  $SKOPEO copy --retry-times 5 "$SRC_V1" "docker://$REPO:$V1" >/dev/null
+  d1="$($SKOPEO inspect --format '{{.Digest}}' "docker://$REPO:$V1")"
+  echo "oci: pushed $REPO:$V1 ($d1)"
+  ;;
+public)
+  d="$($SKOPEO inspect --format '{{.Digest}}' "docker://$REG/library/busybox:latest")"
+  echo "oci: public busybox ($d)"
+  ;;
+private)
+  d1="$($SKOPEO inspect --format '{{.Digest}}' "docker://$REPO:$V1")"
+  [ -n "$d1" ] || { echo "oci: no digest for $V1"; exit 1; }
+  $SKOPEO inspect --config "docker://$REPO:$V1" | grep -q architecture
+  echo "oci: private $REPO:$V1 ($d1) ok"
+  ;;
+upgrade)
+  $SKOPEO copy --retry-times 5 "$SRC_V2" "docker://$REPO:$V2" >/dev/null
+  d1="$($SKOPEO inspect --format '{{.Digest}}' "docker://$REPO:$V1")"
+  d2="$($SKOPEO inspect --format '{{.Digest}}' "docker://$REPO:$V2")"
+  [ "$d1" != "$d2" ] || { echo "oci: tags collapsed to one digest"; exit 1; }
+  echo "oci: $V1=$d1 $V2=$d2"
+  ;;
+delete)
+  d1="$($SKOPEO inspect --format '{{.Digest}}' "docker://$REPO:$V1")"
+  $SKOPEO delete "docker://$REPO:$V1"
+  if $SKOPEO inspect "docker://$REPO:$V1" >/dev/null 2>&1; then
+    echo "oci: $V1 still present after delete"; exit 1
+  fi
+  d2="$($SKOPEO inspect --format '{{.Digest}}' "docker://$REPO:$V2")"
+  [ -n "$d2" ] || { echo "oci: $V2 lost after deleting $V1"; exit 1; }
+  echo "oci: deleted $V1 ($d1), $V2 survives"
+  ;;
+esac

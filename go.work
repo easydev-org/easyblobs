@@ -1,0 +1,36 @@
+go 1.26.5
+
+use (
+	./apk
+	./cargo
+	./cmd
+	./composer
+	./conan
+	./conda
+	./core
+	./debian
+	./generic
+	./git
+	./gitlfs
+	./go
+	./helm
+	./hex
+	./httpcache
+	./huggingface
+	./ivy
+	./maven
+	./netcache
+	./nix
+	./npm
+	./nuget
+	./oci
+	./protobuf
+	./pub
+	./pypi
+	./rpm
+	./rubygems
+	./swiftpm
+	./system
+	./s3blob
+	./targets
+)

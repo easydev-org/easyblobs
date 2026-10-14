@@ -1,0 +1,46 @@
+ARG BASE_IMAGE=forgejo.develop.10.199.64.20.nip.io/easy-platform/toolchain-base:latest
+FROM ${BASE_IMAGE}
+ARG EASYLAB=http://easy-platform.temp.svc.cluster.local
+ARG APT_MIRROR=mirrors.ustc.edu.cn
+# Build PHP 8.5.10 from source on the Debian base (no external php image), then
+# drop in composer.phar. Build-only toolchain is purged afterwards.
+RUN set -eux; \
+    . /etc/os-release; \
+    case "${VERSION_CODENAME:-bookworm}" in \
+      trixie) SUITES="trixie trixie-updates"; SEC="trixie-security"; \
+              ZIP=libzip5; READLINE=libreadline8t64; CURL=libcurl4t64;; \
+      *)      SUITES="bookworm bookworm-updates"; SEC="bookworm-security"; \
+              ZIP=libzip4; READLINE=libreadline8; CURL=libcurl4;; \
+    esac; \
+    printf 'Types: deb\nURIs: http://%s/debian\nSuites: %s\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n\nTypes: deb\nURIs: http://%s/debian-security\nSuites: %s\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n' "$APT_MIRROR" "$SUITES" "$APT_MIRROR" "$SEC" > /etc/apt/sources.list.d/debian.sources; \
+    apt-get -o Acquire::Retries=10 update; \
+    for i in 1 2 3 4 5 6; do \
+      apt-get -o Acquire::Retries=10 install -y --no-install-recommends \
+        build-essential autoconf bison re2c pkg-config \
+        libxml2-dev libsqlite3-dev libssl-dev zlib1g-dev libcurl4-openssl-dev \
+        libzip-dev libonig-dev libreadline-dev libffi-dev \
+      && break || { echo "retry $i"; sleep 3; }; \
+    done; \
+    curl -fsSL -o /tmp/php.tar.gz "${EASYLAB}/pkgs/generic/php-src/8.5.10/php-8.5.10.tar.gz"; \
+    mkdir -p /tmp/php && tar -xzf /tmp/php.tar.gz -C /tmp/php --strip-components=1; \
+    cd /tmp/php; \
+    ./configure --prefix=/opt/php \
+        --with-openssl --with-zlib --with-curl --with-libxml \
+        --enable-mbstring --with-zip --with-sqlite3 --with-readline \
+        --enable-phar --enable-tokenizer --enable-filter --enable-session \
+        --enable-ctype --without-pear >/tmp/php-config.log 2>&1; \
+    make -j"$(nproc)" >/tmp/php-make.log 2>&1; \
+    make install >/tmp/php-install.log 2>&1; \
+    cd /; rm -rf /tmp/php /tmp/php.tar.gz /tmp/php-*.log; \
+    apt-get purge -y build-essential autoconf bison re2c pkg-config \
+        libxml2-dev libsqlite3-dev libssl-dev zlib1g-dev libcurl4-openssl-dev \
+        libzip-dev libonig-dev libreadline-dev libffi-dev; \
+    apt-get autoremove -y; \
+    apt-get -o Acquire::Retries=10 install -y --no-install-recommends \
+        "$ZIP" libonig5 "$READLINE" "$CURL"; \
+    rm -rf /var/lib/apt/lists/*; \
+    printf 'Types: deb\nURIs: http://deb.debian.org/debian\nSuites: %s\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n\nTypes: deb\nURIs: http://deb.debian.org/debian-security\nSuites: %s\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n' "$SUITES" "$SEC" > /etc/apt/sources.list.d/debian.sources
+RUN curl -fsSL -o /opt/composer.phar "${EASYLAB}/pkgs/generic/composer/2.10.3/composer.phar" \
+ && printf '#!/bin/sh\nexec /opt/php/bin/php /opt/composer.phar "$@"\n' > /usr/local/bin/composer \
+ && chmod +x /usr/local/bin/composer
+ENV PATH=/opt/php/bin:$PATH

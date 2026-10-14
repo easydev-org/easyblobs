@@ -1,0 +1,84 @@
+package store
+
+import (
+	"github.com/glebarez/sqlite"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+)
+
+// Metadata backend kinds (shared with easyvcs).
+const (
+	KindSQLite   = "sqlite"
+	KindPostgres = "postgres"
+	KindMySQL    = "mysql"
+)
+
+// dialector returns the GORM dialector for a backend kind. sqlite uses the
+// pure-Go glebarez/sqlite dialector (which wraps modernc, registering the
+// "sqlite" database/sql driver exactly once) so easyvcs and artifact share one
+// driver registration per process — avoiding "Register called twice".
+func dialector(kind, dsn string) gorm.Dialector {
+	switch kind {
+	case KindPostgres:
+		return postgres.Open(dsn)
+	case KindMySQL:
+		return mysql.Open(dsn)
+	default:
+		return sqlite.Open(dsn)
+	}
+}
+
+// GORM models for the metadata index. Table names are pinned to the legacy
+// schema so any existing raw-SQL callers remain consistent.
+type artifactRow struct {
+	Format      string `gorm:"primaryKey;not null"`
+	Repository  string `gorm:"primaryKey;not null"`
+	Version     string `gorm:"primaryKey;not null"`
+	MediaType   string `gorm:"not null;default:''"`
+	Digest      string `gorm:"not null;default:''"`
+	Proprietary []byte
+	Blobs       string `gorm:"not null;default:'[]'"`
+	Source      string `gorm:"not null;default:''"`
+	Target      string `gorm:"not null;default:'';index"`
+	// HTTP cache metadata (netcache): replay + revalidation.
+	ETag            string `gorm:"not null;default:''"`
+	LastModified    string `gorm:"not null;default:''"`
+	ContentEncoding string `gorm:"not null;default:''"`
+	CacheControl    string `gorm:"not null;default:''"`
+	// ExpiresAt is indexed so the reaper's expiry sweep is a range scan, not a
+	// table scan.
+	ExpiresAt int64 `gorm:"not null;default:0;index"`
+}
+
+type uploadRow struct {
+	ID         string `gorm:"primaryKey;not null"`
+	Format     string `gorm:"not null"`
+	Repository string `gorm:"not null"`
+	Digest     string `gorm:"not null;default:''"`
+	Bytes      int64  `gorm:"not null;default:0"`
+	Complete   int    `gorm:"not null;default:0"`
+}
+
+type metaRow struct {
+	Format     string `gorm:"primaryKey;not null"`
+	Repository string `gorm:"primaryKey;not null"`
+	Data       []byte
+}
+
+// targetRow persists a user-declared pull-through target. The whole Target is
+// stored as JSON so new fields need no migration; ID is the key.
+type targetRow struct {
+	ID   string `gorm:"primaryKey;not null"`
+	JSON []byte
+}
+
+func (artifactRow) TableName() string { return "artifacts" }
+func (uploadRow) TableName() string   { return "uploads" }
+func (metaRow) TableName() string     { return "meta" }
+func (targetRow) TableName() string   { return "targets" }
+
+// negativeMediaType marks a netcache negative (404/410) entry: it holds no blob
+// and exists only to absorb repeated misses until it expires. The reaper may
+// delete these freely; no bytes are lost.
+const negativeMediaType = "application/x-netcache-miss"

@@ -1,0 +1,446 @@
+// Package system implements the cross-protocol admin API (/artifacts/system):
+// upstream overrides, per-key proxy policy, and package enumeration/deletion.
+// Mirror of the pkglab-core system router so an embedder can wire any
+// substrate. Lives in its own module because it is inherently cross-protocol.
+package system
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"strings"
+
+	"github.com/easydev-org/easyblobs/core"
+	"github.com/easydev-org/easyblobs/targets"
+)
+
+// State carries the registry + auth for the admin endpoints.
+type State struct {
+	Registry *easyblobkit.Registry
+	Auth     easyblobkit.Auth
+	// TargetsStore persists user-declared targets; nil keeps the instance at
+	// its built-ins.
+	TargetsStore targets.Store
+	// StatsFunc returns the registry footprint as JSON-marshalable data. It is
+	// injected by the server (the concrete store lives outside core, so the
+	// adapter cannot import it directly).
+	StatsFunc func(ctx context.Context) (any, error)
+}
+
+// NewHandler is the easyblobkit.Register constructor.
+func NewHandler(reg *easyblobkit.Registry, cfg map[string]any) (http.Handler, error) {
+	s := &State{Registry: reg}
+	if a, ok := cfg["auth"].(easyblobkit.Auth); ok {
+		s.Auth = a
+	}
+	if st, ok := cfg["targets_store"].(targets.Store); ok {
+		s.TargetsStore = st
+	}
+	if s.TargetsStore == nil && reg != nil {
+		s.TargetsStore = reg.TargetStore
+	}
+	if fn, ok := cfg["stats_func"].(func(context.Context) (any, error)); ok {
+		s.StatsFunc = fn
+	}
+	return s, nil
+}
+
+func init() { easyblobkit.Register("system", NewHandler) }
+
+func (s *State) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// The whole admin surface is operator-only, reads included: the bodies are
+	// routing configuration (upstreams, targets, proxy policy) and inventory,
+	// not package bytes. Gating once here (before dispatch) keeps a future
+	// sub-endpoint from being added without a gate. auth == nil (dev/open
+	// instance) permits access, matching the write path.
+	// The static UI carries no secrets (the operator pastes a token which only
+	// the data endpoints validate), so it is served BEFORE the gate.
+	uiPath := stringsTrimPrefix(r.URL.Path, "/artifacts/system")
+	uiPath = stringsTrimPrefix(uiPath, "/system")
+	if uiPath == "/ui" || strings.HasPrefix(uiPath, "/ui/") {
+		s.ui(w, r)
+		return
+	}
+	if !easyblobkit.AuthorizeAdmin(w, r, s.Auth, "registry-admin") {
+		return
+	}
+	path := stringsTrimPrefix(r.URL.Path, "/artifacts/system")
+	path = stringsTrimPrefix(path, "/system")
+
+	switch {
+	case path == "/targets" || path == "/targets/":
+		s.targets(w, r)
+	case len(path) > len("/targets/") && strings.HasPrefix(path, "/targets/"):
+		s.targetKey(w, r, stringsTrimPrefix(path, "/targets/"))
+	case path == "/upstreams" || path == "/upstreams/":
+		s.listUpstreams(w, r)
+	case len(path) > len("/upstreams/") && strings.HasPrefix(path, "/upstreams/"):
+		key := stringsTrimPrefix(path, "/upstreams/")
+		s.upstreamKey(w, r, key)
+	case path == "/proxy" || path == "/proxy/":
+		s.listProxy(w, r)
+	case len(path) > len("/proxy/") && strings.HasPrefix(path, "/proxy/"):
+		key := stringsTrimPrefix(path, "/proxy/")
+		s.proxyKey(w, r, key)
+	case path == "/packages" || path == "/packages/":
+		s.packages(w, r)
+	case path == "/downloads" || path == "/downloads/":
+		s.downloads(w, r)
+	case path == "/stats" || path == "/stats/":
+		s.stats(w, r)
+	case path == "/repos" || path == "/repos/":
+		s.repos(w, r)
+	case len(path) > len("/repos/") && strings.HasPrefix(path, "/repos/"):
+		s.repoKey(w, r, stringsTrimPrefix(path, "/repos/"))
+	default:
+		w.WriteHeader(http.StatusNotFound)
+	}
+}
+
+func (s *State) lookup(key string) (string, bool) {
+	// Dotted sub-endpoint first, then bare format.
+	if i := indexByte(key, '.'); i > 0 {
+		sub := s.Registry.Upstreams.Sub(key[:i], key[i+1:])
+		if sub != "" {
+			return sub, true
+		}
+	}
+	v := s.Registry.Upstreams.Get(key)
+	return v, v != ""
+}
+
+// downloads lists the in-flight upstream downloads (bytes fetched so far +
+// total when known) for GET /artifacts/system/downloads.
+func (s *State) downloads(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	dl := easyblobkit.ActiveDownloads().List()
+	easyblobkit.JSON(w, http.StatusOK, map[string]any{"downloads": dl, "count": len(dl)})
+}
+
+// targets lists every configured target (built-ins + user-declared) when a
+// registry is present, or the user targets the store holds otherwise.
+func (s *State) targets(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.Registry != nil && s.Registry.Upstreams != nil && s.Registry.Upstreams.Targets != nil {
+		easyblobkit.JSON(w, http.StatusOK, map[string]any{"targets": s.Registry.Upstreams.Targets.List()})
+		return
+	}
+	if s.TargetsStore == nil {
+		easyblobkit.JSON(w, http.StatusOK, map[string]any{"targets": []targets.Target{}})
+		return
+	}
+	ts, err := s.TargetsStore.ListTargets(r.Context())
+	if err != nil {
+		easyblobkit.JSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	easyblobkit.JSON(w, http.StatusOK, map[string]any{"targets": ts})
+}
+
+// targetKey gets, sets, or deletes one user-declared target by ID. Deleting a
+// built-in ID is refused: built-ins are compile-time policy.
+func (s *State) targetKey(w http.ResponseWriter, r *http.Request, id string) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		easyblobkit.JSON(w, http.StatusBadRequest, map[string]any{"error": "missing target id"})
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		if s.Registry != nil && s.Registry.Upstreams != nil && s.Registry.Upstreams.Targets != nil {
+			if t, ok := s.Registry.Upstreams.Targets.Get(id); ok {
+				easyblobkit.JSON(w, http.StatusOK, t)
+				return
+			}
+		}
+		easyblobkit.JSON(w, http.StatusNotFound, map[string]any{"error": "unknown target: " + id})
+	case http.MethodPut, http.MethodPost:
+		if s.TargetsStore == nil {
+			easyblobkit.JSON(w, http.StatusNotImplemented, map[string]any{"error": "target store not configured"})
+			return
+		}
+		var t targets.Target
+		if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
+			easyblobkit.JSON(w, http.StatusBadRequest, map[string]any{"error": "bad target body"})
+			return
+		}
+		if t.ID == "" {
+			t.ID = id
+		}
+		if t.ID != id {
+			easyblobkit.JSON(w, http.StatusBadRequest, map[string]any{"error": "target id mismatch"})
+			return
+		}
+		if t.Protocol == "" {
+			t.Protocol, _ = targets.SplitID(t.ID)
+		}
+		if t.Kind == "" {
+			t.Kind = targets.Mirror
+		}
+		if t.Share == nil {
+			// User targets isolate by default (a private repo must not shadow
+			// public coordinates); keep the persisted copy in agreement with
+			// what the in-memory registry will apply.
+			share := false
+			t.Share = &share
+		}
+		if err := validateTarget(t); err != nil {
+			easyblobkit.JSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		if err := s.TargetsStore.PutTarget(r.Context(), t); err != nil {
+			easyblobkit.JSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		if s.Registry != nil && s.Registry.Upstreams != nil && s.Registry.Upstreams.Targets != nil {
+			s.Registry.Upstreams.Targets.Put(t)
+		}
+		easyblobkit.JSON(w, http.StatusOK, t)
+	case http.MethodDelete:
+		if s.TargetsStore == nil {
+			easyblobkit.JSON(w, http.StatusNotImplemented, map[string]any{"error": "target store not configured"})
+			return
+		}
+		if s.Registry != nil && s.Registry.Upstreams != nil && s.Registry.Upstreams.Targets != nil {
+			if t, ok := s.Registry.Upstreams.Targets.Get(id); ok && t.Builtin {
+				easyblobkit.JSON(w, http.StatusForbidden, map[string]any{"error": "cannot delete a built-in target"})
+				return
+			}
+		}
+		if err := s.TargetsStore.DeleteTarget(r.Context(), id); err != nil {
+			easyblobkit.JSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		if s.Registry != nil && s.Registry.Upstreams != nil && s.Registry.Upstreams.Targets != nil {
+			s.Registry.Upstreams.Targets.Delete(id)
+		}
+		easyblobkit.JSON(w, http.StatusOK, map[string]any{"id": id, "deleted": true})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+// validateTarget rejects targets that could not be routed or fetched.
+func validateTarget(t targets.Target) error {
+	if t.ID == "" {
+		return errText("missing id")
+	}
+	if t.Protocol == "" {
+		return errText("missing protocol")
+	}
+	if t.Base == "" && len(t.Hosts) == 0 {
+		return errText("a target needs a base URL or at least one host")
+	}
+	if !strings.Contains(t.ID, "/") && t.ID != "" && strings.ContainsAny(t.ID, " \t") {
+		return errText("invalid id")
+	}
+	switch t.Auth.Mode {
+	case "", targets.AuthPassthrough, targets.AuthBasic, targets.AuthBearer:
+	default:
+		return errText("unknown auth mode: " + string(t.Auth.Mode))
+	}
+	return nil
+}
+
+type errText string
+
+func (e errText) Error() string { return string(e) }
+
+func (s *State) listUpstreams(w http.ResponseWriter, r *http.Request) {
+	all := map[string]string{}
+	for _, k := range s.Registry.Upstreams.All() {
+		all[k.Name] = k.URL
+	}
+	easyblobkit.JSON(w, http.StatusOK, map[string]any{"upstreams": all})
+}
+
+func (s *State) upstreamKey(w http.ResponseWriter, r *http.Request, key string) {
+	switch r.Method {
+	case http.MethodGet:
+		u, ok := s.lookup(key)
+		if !ok {
+			easyblobkit.JSON(w, http.StatusNotFound, map[string]any{"error": "unknown upstream key: " + key})
+			return
+		}
+		easyblobkit.JSON(w, http.StatusOK, map[string]any{"key": key, "url": u, "override": s.Registry.Upstreams.IsOverride(key)})
+	case http.MethodPut:
+		if _, ok := s.lookup(key); !ok {
+			easyblobkit.JSON(w, http.StatusNotFound, map[string]any{"error": "unknown upstream key: " + key})
+			return
+		}
+		var body struct {
+			URL string `json:"url"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.URL == "" {
+			easyblobkit.JSON(w, http.StatusBadRequest, map[string]any{"error": "missing url"})
+			return
+		}
+		s.Registry.Upstreams.Set(key, body.URL)
+		easyblobkit.JSON(w, http.StatusOK, map[string]any{"key": key, "url": body.URL})
+	case http.MethodDelete:
+		s.Registry.Upstreams.Reset(key)
+		easyblobkit.JSON(w, http.StatusOK, map[string]any{"key": key, "reset": true})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *State) listProxy(w http.ResponseWriter, r *http.Request) {
+	easyblobkit.JSON(w, http.StatusOK, map[string]any{"proxy": s.Registry.Upstreams.ProxyStates()})
+}
+
+func (s *State) proxyKey(w http.ResponseWriter, r *http.Request, key string) {
+	switch r.Method {
+	case http.MethodGet:
+		if _, ok := s.lookup(key); !ok {
+			easyblobkit.JSON(w, http.StatusNotFound, map[string]any{"error": "unknown upstream key: " + key})
+			return
+		}
+		p, _ := s.Registry.Upstreams.ProxyURL(key)
+		easyblobkit.JSON(w, http.StatusOK, map[string]any{"key": key, "proxy": p})
+	case http.MethodPut:
+		if _, ok := s.lookup(key); !ok {
+			easyblobkit.JSON(w, http.StatusNotFound, map[string]any{"error": "unknown upstream key: " + key})
+			return
+		}
+		var body struct {
+			Proxy string `json:"proxy"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		s.Registry.Upstreams.SetProxy(key, body.Proxy)
+		p, _ := s.Registry.Upstreams.ProxyURL(key)
+		easyblobkit.JSON(w, http.StatusOK, map[string]any{"key": key, "proxy": p})
+	case http.MethodDelete:
+		s.Registry.Upstreams.SetProxy(key, "")
+		easyblobkit.JSON(w, http.StatusOK, map[string]any{"key": key, "reset": true})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+// stats returns the registry footprint (rows, referenced bytes, CAS totals).
+// Read-only and unauthenticated like the other listing endpoints.
+func (s *State) stats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.StatsFunc == nil {
+		easyblobkit.JSON(w, http.StatusNotImplemented, map[string]any{"error": "stats not available"})
+		return
+	}
+	st, err := s.StatsFunc(r.Context())
+	if err != nil {
+		easyblobkit.JSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	easyblobkit.JSON(w, http.StatusOK, st)
+}
+
+func (s *State) packages(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodDelete {
+		repo := r.URL.Query().Get("repo")
+		if repo == "" {
+			easyblobkit.JSON(w, http.StatusBadRequest, map[string]any{"error": "missing repo"})
+			return
+		}
+		n, err := s.Registry.Meta.DeleteRepo(r.Context(), "", repo)
+		if err != nil {
+			easyblobkit.JSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		easyblobkit.JSON(w, http.StatusOK, map[string]any{"repo": repo, "deleted": n})
+		return
+	}
+	repo := r.URL.Query().Get("repo")
+	pkgs, err := s.Registry.Meta.ListPackages(r.Context())
+	if err != nil {
+		easyblobkit.JSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if repo != "" {
+		var filtered []easyblobkit.PackageSummary
+		for _, p := range pkgs {
+			if p.Repository == repo {
+				filtered = append(filtered, p)
+			}
+		}
+		pkgs = filtered
+	}
+	easyblobkit.JSON(w, http.StatusOK, map[string]any{"packages": pkgs})
+}
+
+func stringsTrimPrefix(s, p string) string {
+	if len(s) >= len(p) && s[:len(p)] == p {
+		return s[len(p):]
+	}
+	return s
+}
+
+func indexByte(s string, b byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == b {
+			return i
+		}
+	}
+	return -1
+}
+
+// repos lists every repository override (format/repo -> upstream + proxy) and
+// every format's effective default, so an operator can see how a request for
+// a given namespace will be routed.
+func (s *State) repos(w http.ResponseWriter, r *http.Request) {
+	easyblobkit.JSON(w, http.StatusOK, map[string]any{
+		"repos":   s.Registry.Upstreams.RepoStates(),
+		"formats": s.Registry.Upstreams.All(),
+	})
+}
+
+// repoKey gets or sets one repository override. The key is "format/repo"
+// (repo may be a namespace prefix: maven/org.apache, npm/@acme).
+func (s *State) repoKey(w http.ResponseWriter, r *http.Request, key string) {
+	format, repo, ok := stringsCut(key, "/")
+	if !ok || format == "" || repo == "" {
+		easyblobkit.JSON(w, http.StatusBadRequest, map[string]any{"error": "key must be format/repo"})
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		if e, ok := s.Registry.Upstreams.RepoOverride(format, repo); ok {
+			easyblobkit.JSON(w, http.StatusOK, map[string]any{"format": format, "repo": repo, "base": e.Base, "proxy": e.Proxy})
+			return
+		}
+		easyblobkit.JSON(w, http.StatusNotFound, map[string]any{"error": "no override for " + key})
+	case http.MethodPut:
+		var body struct {
+			Base  string `json:"base"`
+			Proxy string `json:"proxy"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Base == "" {
+			easyblobkit.JSON(w, http.StatusBadRequest, map[string]any{"error": "missing base"})
+			return
+		}
+		s.Registry.Upstreams.SetRepo(format, repo, body.Base, body.Proxy)
+		easyblobkit.JSON(w, http.StatusOK, map[string]any{"format": format, "repo": repo, "base": body.Base})
+	case http.MethodDelete:
+		s.Registry.Upstreams.ResetRepo(format, repo)
+		easyblobkit.JSON(w, http.StatusOK, map[string]any{"format": format, "repo": repo, "reset": true})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func stringsCut(s, sep string) (string, string, bool) {
+	if i := indexByte(s, sep[0]); i >= 0 {
+		return s[:i], s[i+len(sep):], true
+	}
+	return s, "", false
+}

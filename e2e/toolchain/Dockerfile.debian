@@ -1,0 +1,2 @@
+ARG BASE_IMAGE=forgejo.develop.10.199.64.20.nip.io/easy-platform/toolchain-base:latest
+FROM ${BASE_IMAGE}

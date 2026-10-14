@@ -1,0 +1,6 @@
+ARG BASE_IMAGE=forgejo.develop.10.199.64.20.nip.io/easy-platform/toolchain-base:latest
+FROM ${BASE_IMAGE}
+ARG EASYLAB=http://easy-platform.temp.svc.cluster.local
+RUN mkdir -p /opt/regctl && curl -fsSL -o /opt/regctl/regctl "${EASYLAB}/pkgs/generic/regctl/0.11.6/regctl-linux-amd64" && chmod +x /opt/regctl/regctl \
+ && mkdir -p /opt/skopeo && curl -fsSL -o /opt/skopeo/skopeo "${EASYLAB}/pkgs/generic/skopeo/1.24.0/skopeo-linux-amd64" && chmod +x /opt/skopeo/skopeo
+ENV PATH=/opt/regctl:/opt/skopeo:$PATH

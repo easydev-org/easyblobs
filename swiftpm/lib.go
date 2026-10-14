@@ -1,0 +1,424 @@
+// Package swift implements the Swift Package Registry (SE-0321): releases,
+// source archives, Package.swift, publish, identifiers, login. Mirror of the
+// pkglab reference (SCM-to-registry stubs are omitted; pull-through supported).
+package swift
+
+import (
+	"archive/zip"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/easydev-org/easyblobs/core"
+)
+
+type State struct {
+	Registry *easyblobkit.Registry
+	Auth     easyblobkit.Auth
+	SelfBase string
+}
+
+func NewHandler(reg *easyblobkit.Registry, cfg map[string]any) (http.Handler, error) {
+	s := &State{Registry: reg}
+	if a, ok := cfg["auth"].(easyblobkit.Auth); ok {
+		s.Auth = a
+	}
+	if v, ok := cfg["self_base"].(string); ok {
+		s.SelfBase = v
+	}
+	return s, nil
+}
+
+func init() { easyblobkit.Register("swift", NewHandler) }
+
+func (s *State) base() string { return easyblobkit.SelfURL(s.SelfBase, "swiftpm") }
+
+func (s *State) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/artifacts/swift")
+	path = strings.TrimPrefix(path, "/swift")
+	path = strings.Trim(path, "/")
+	method := r.Method
+
+	switch {
+	case path == "" || path == "/":
+		if method == http.MethodPost || method == http.MethodGet {
+			s.login(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	case path == "login":
+		s.login(w, r)
+	case path == "identifiers":
+		s.identifiers(w, r)
+	case method == http.MethodOptions:
+		w.Header().Set("Allow", "GET, HEAD, PUT, OPTIONS")
+		w.Header().Set("Link", `<https://github.com/swiftlang/swift-package-manager/blob/main/Documentation/PackageRegistry/Registry.md>; rel="service-doc"`)
+		w.Header().Set("Content-Version", "1")
+		w.WriteHeader(http.StatusOK)
+	case method == http.MethodPut:
+		if !easyblobkit.AuthorizeWriteScoped(w, r, s.Auth, s.Registry, "swiftpm") {
+			return
+		}
+		s.putPath(w, r, path)
+	case method == http.MethodDelete:
+		// DELETE /{scope}/{name}/{version} — remove a release. The registry
+		// spec does not standardize deletion; the client-facing flow only
+		// needs the release to stop resolving afterwards.
+		if !easyblobkit.AuthorizeWriteScoped(w, r, s.Auth, s.Registry, "swiftpm") {
+			return
+		}
+		parts := strings.Split(path, "/")
+		if len(parts) != 3 {
+			easyblobkit.Error(w, http.StatusNotFound, "invalid path")
+			return
+		}
+		full := parts[0] + "." + parts[1]
+		if _, err := s.Registry.Meta.Get(r.Context(), "swift", full, parts[2]); err != nil {
+			easyblobkit.Error(w, http.StatusNotFound, "release not found")
+			return
+		}
+		if err := s.Registry.Meta.Delete(r.Context(), "swift", full, parts[2]); err != nil && !easyblobkit.IsUnknown(err) {
+			easyblobkit.Error(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	case method == http.MethodGet || method == http.MethodHead:
+		parts := strings.Split(path, "/")
+		if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+			easyblobkit.Error(w, http.StatusNotFound, "invalid path")
+			return
+		}
+		scope, name := parts[0], parts[1]
+		id := scope + "." + name
+		if len(parts) == 2 {
+			s.releases(w, r, scope, name, id)
+		} else if len(parts) == 3 {
+			ver := parts[2]
+			if strings.HasSuffix(ver, ".zip") {
+				s.sourceZip(w, r, id, strings.TrimSuffix(ver, ".zip"), name)
+			} else {
+				s.versionMeta(w, r, id, ver)
+			}
+		} else if len(parts) == 4 && parts[3] == "Package.swift" {
+			s.packageSwift(w, r, id, parts[2], name)
+		} else {
+			easyblobkit.Error(w, http.StatusNotFound, "release not found")
+		}
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *State) login(w http.ResponseWriter, r *http.Request) {
+	if s.Auth != nil {
+		if u := s.Auth.Authenticate(r.Context(), r); u != "" {
+			tok := s.Auth.IssueToken(r.Context(), u, nil, 3600)
+			easyblobkit.JSON(w, http.StatusOK, map[string]any{"token": tok})
+			return
+		}
+	}
+	easyblobkit.JSON(w, http.StatusOK, map[string]any{"token": "valid"})
+}
+
+func (s *State) identifiers(w http.ResponseWriter, r *http.Request) {
+	if urlParam := r.URL.Query().Get("url"); urlParam != "" {
+		id := strings.ReplaceAll(strings.ReplaceAll(urlParam, "%3A", ":"), "%2F", "/")
+		scope, name := idIdentity(id)
+		result := scope + "." + name
+		// Persist the git URL so SCM-to-registry can enumerate tags + serve
+		// source archives (mirrors the reference `swift-git:{id}` meta slot).
+		_ = s.Registry.Meta.SetMeta(r.Context(), "swift", "swift-git:"+result, []byte(id))
+		easyblobkit.JSON(w, http.StatusOK, map[string]any{"identifiers": []string{result}})
+		return
+	}
+	repos, _ := s.Registry.Meta.ListRepositoriesByFormat(r.Context(), "swift")
+	easyblobkit.JSON(w, http.StatusOK, map[string]any{"identifiers": repos})
+}
+
+// gitURLFor returns the persisted git URL for an identifier ("" when absent).
+func (s *State) gitURLFor(ctx context.Context, id string) string {
+	if b, err := s.Registry.Meta.GetMeta(ctx, "swift", "swift-git:"+id); err == nil {
+		return string(b)
+	}
+	return ""
+}
+
+// gitTags lists the semver-looking tags of a remote git repo.
+func (s *State) gitTags(ctx context.Context, url string) []string {
+	tctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(tctx, "git", "ls-remote", "--tags", "--refs", url)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	var tags []string
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		ref := fields[1]
+		tag := ref[strings.LastIndex(ref, "/")+1:]
+		// Only semver-ish tags; strip a leading "v".
+		v := strings.TrimPrefix(tag, "v")
+		if _, _, _, _, ok := tryParseSemver(v); ok {
+			tags = append(tags, v)
+		}
+	}
+	return tags
+}
+
+func tryParseSemver(raw string) (major, minor, patch int, prerelease string, ok bool) {
+	s := strings.TrimSpace(raw)
+	if len(s) > 0 && (s[0] == 'v' || s[0] == 'V') {
+		s = s[1:]
+	}
+	if s == "" {
+		return 0, 0, 0, "", false
+	}
+	core := s
+	if i := strings.IndexAny(s, "-+"); i >= 0 {
+		core = s[:i]
+		prerelease = s[i:]
+	}
+	parts := strings.Split(core, ".")
+	if len(parts) < 1 || len(parts) > 3 {
+		return 0, 0, 0, "", false
+	}
+	var nums []int
+	for _, p := range parts {
+		var n int
+		if p == "" {
+			return 0, 0, 0, "", false
+		}
+		for _, c := range p {
+			if c < '0' || c > '9' {
+				return 0, 0, 0, "", false
+			}
+			n = n*10 + int(c-'0')
+		}
+		nums = append(nums, n)
+	}
+	for len(nums) < 3 {
+		nums = append(nums, 0)
+	}
+	return nums[0], nums[1], nums[2], prerelease, true
+}
+
+// gitArchive builds a source archive (zip) of a repo at a tag using
+// `git archive`. Falls back to an empty zip on error.
+func (s *State) gitArchive(ctx context.Context, url, tag string) []byte {
+	dir, err := os.MkdirTemp("", "artifact-swift-git-*")
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	tctx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+	if err := exec.CommandContext(tctx, "git", "clone", "--depth", "1", "--branch", tag, url, filepath.Join(dir, "repo")).Run(); err != nil {
+		return nil
+	}
+	cmd := exec.CommandContext(tctx, "git", "-C", filepath.Join(dir, "repo"), "archive", "--format=zip", "-o", filepath.Join(dir, "out.zip"), "HEAD")
+	if err := cmd.Run(); err != nil {
+		return nil
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "out.zip"))
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
+func idIdentity(url string) (string, string) {
+	u := strings.TrimPrefix(url, "https://")
+	u = strings.TrimPrefix(u, "http://")
+	u = strings.TrimSuffix(strings.TrimSuffix(u, ".git"), "/")
+	parts := strings.Split(u, "/")
+	if len(parts) >= 2 {
+		return parts[len(parts)-2], parts[len(parts)-1]
+	}
+	return "local", "package"
+}
+
+func (s *State) releases(w http.ResponseWriter, r *http.Request, scope, name, id string) {
+	versions, _ := s.Registry.Meta.ListVersions(r.Context(), "swift", id)
+	rels := map[string]any{}
+	for _, v := range versions {
+		rels[v] = map[string]any{"url": s.base() + "/" + easyblobkit.URLencode(scope) + "/" + easyblobkit.URLencode(name) + "/" + v + ".zip"}
+	}
+	if len(rels) == 0 {
+		// SCM-to-registry: if a git URL was persisted for this id, enumerate
+		// its tags as releases (each served as a source archive zip below).
+		if gu := s.gitURLFor(r.Context(), id); gu != "" {
+			if tags := s.gitTags(r.Context(), gu); len(tags) > 0 {
+				for _, t := range tags {
+					rels[t] = map[string]any{"url": s.base() + "/" + easyblobkit.URLencode(scope) + "/" + easyblobkit.URLencode(name) + "/" + t + ".zip"}
+				}
+				w.Header().Set("Content-Version", "1")
+				easyblobkit.JSON(w, http.StatusOK, map[string]any{"releases": rels})
+				return
+			}
+		}
+		remote, err := s.Registry.Remote(r.Context(), easyblobkit.UpstreamSpec{Format: "swift"})
+		if err == nil {
+			if body, err := remote.GetCached(r.Context(), easyblobkit.SharedIndexCache(), "/"+easyblobkit.URLencode(scope)+"="+easyblobkit.URLencode(name)); err == nil {
+				w.Header().Set("Content-Version", "1")
+				easyblobkit.JSON(w, http.StatusOK, json.RawMessage(body))
+				return
+			}
+		}
+	}
+	w.Header().Set("Content-Version", "1")
+	easyblobkit.JSON(w, http.StatusOK, map[string]any{"releases": rels})
+}
+
+func (s *State) versionMeta(w http.ResponseWriter, r *http.Request, id, version string) {
+	checksum := ""
+	if art, err := s.Registry.Meta.Get(r.Context(), "swift", id, version); err == nil && len(art.Blobs) > 0 {
+		checksum = art.Blobs[0].Hex()
+	}
+	w.Header().Set("Content-Version", "1")
+	easyblobkit.JSON(w, http.StatusOK, map[string]any{
+		"id": id, "version": version,
+		"resources": []any{map[string]any{"name": "source-archive", "type": "application/zip", "checksum": checksum}},
+		"metadata":  map[string]any{"description": ""}, "publishedAt": "2024-01-01T00:00:00Z",
+	})
+}
+
+func (s *State) sourceZip(w http.ResponseWriter, r *http.Request, id, version, name string) {
+	filename := name + "-" + version + ".zip"
+	if art, err := s.Registry.Meta.Get(r.Context(), "swift", id, version); err == nil {
+		for _, b := range art.Blobs {
+			if easyblobkit.ServeBlobAtNamed(w, r, s.Registry.Blobs, r.Context(), b.Digest, "application/zip", filename) {
+				return
+			}
+		}
+	}
+	// Stream the source zip into the CAS (no full buffering).
+	digest, size, ok := s.Registry.FetchToBlob(r.Context(), "swift", "/"+easyblobkit.URLencode(id)+"/"+version+".zip")
+	if !ok {
+		// SCM-to-registry: build a source archive from the persisted git repo.
+		if gu := s.gitURLFor(r.Context(), id); gu != "" {
+			if data := s.gitArchive(r.Context(), gu, version); len(data) > 0 {
+				storeVersionSource(s.Registry, id, version, filename, data, "pull", r.Context())
+				w.Header().Set("Content-Type", "application/zip")
+				w.Header().Set("Content-Length", fmt.Sprint(len(data)))
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(data)
+				return
+			}
+		}
+		easyblobkit.JSON(w, http.StatusNotFound, map[string]any{"error": "not found"})
+		return
+	}
+	storeVersionBlob(s.Registry, id, version, filename, digest, size, "pull", r.Context())
+	if easyblobkit.ServeBlobAtNamed(w, r, s.Registry.Blobs, r.Context(), digest, "application/zip", filename) {
+		return
+	}
+	easyblobkit.Error(w, http.StatusBadGateway, "cache error")
+}
+
+func (s *State) packageSwift(w http.ResponseWriter, r *http.Request, id, version, name string) {
+	if art, err := s.Registry.Meta.Get(r.Context(), "swift", id, version); err == nil {
+		for _, b := range art.Blobs {
+			rd, err := s.Registry.Blobs.Open(r.Context(), b.Digest)
+			if err != nil || rd == nil {
+				continue
+			}
+			data, _ := io.ReadAll(rd)
+			_ = rd.Close()
+			if manifest, ok := extractPackageSwift(data); ok {
+				w.Header().Set("Content-Version", "1")
+				easyblobkit.Text(w, http.StatusOK, manifest, "text/x-swift")
+				return
+			}
+		}
+	}
+	manifest := "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"" + name + "\",\n    products: [.library(name: \"" + name + "\", targets: [\"" + name + "\"])],\n    targets: [.target(name: \"" + name + "\")]\n)\n"
+	w.Header().Set("Content-Version", "1")
+	easyblobkit.Text(w, http.StatusOK, manifest, "text/x-swift")
+}
+
+func (s *State) putPath(w http.ResponseWriter, r *http.Request, path string) {
+	parts := strings.Split(path, "/")
+	if len(parts) != 3 {
+		easyblobkit.JSON(w, http.StatusBadRequest, map[string]any{"error": "invalid upload path"})
+		return
+	}
+	scope, name, ver := parts[0], parts[1], parts[2]
+	full := scope + "." + name
+	easyblobkit.LimitBody(w, r)
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		easyblobkit.WriteReadErr(w, err)
+		return
+	}
+	ct := r.Header.Get("Content-Type")
+	zipData := raw
+	if strings.HasPrefix(ct, "multipart/form-data") {
+		if d, ok := easyblobkit.ExtractField(raw, ct, "source-archive"); ok {
+			zipData = d
+		}
+	}
+	if len(zipData) == 0 {
+		easyblobkit.JSON(w, http.StatusBadRequest, map[string]any{"error": "missing source-archive"})
+		return
+	}
+	h, _ := easyblobkit.ComputeHashesBytes(zipData)
+	filename := name + "-" + ver + ".zip"
+	storeVersionSource(s.Registry, full, ver, filename, zipData, "push", r.Context())
+	w.Header().Set("Content-Version", "1")
+	w.Header().Set("Location", s.base()+"/"+easyblobkit.URLencode(scope)+"/"+easyblobkit.URLencode(name)+"/"+ver+".zip")
+	easyblobkit.JSON(w, http.StatusCreated, map[string]any{
+		"id": full, "version": ver,
+		"resources": []any{map[string]any{"name": "source-archive", "type": "application/zip", "checksum": h.SHA256}},
+	})
+}
+
+// storeVersionBlob records a source zip already streamed into the CAS.
+func storeVersionBlob(reg *easyblobkit.Registry, full, version, filename, digest string, size int64, source string, ctx context.Context) {
+	art, _ := reg.Meta.Get(ctx, "swift", full, version)
+	if art.Format == "" {
+		art = easyblobkit.Artifact{Format: "swift", Repository: full, Version: version, Source: source}
+	}
+	var kept []easyblobkit.Descriptor
+	for _, b := range art.Blobs {
+		if b.Name != filename {
+			kept = append(kept, b)
+		}
+	}
+	art.Blobs = append(kept, easyblobkit.Descriptor{Digest: digest, Size: size, Name: filename})
+	easyblobkit.LogMetaErr("meta put", reg.Meta.Put(ctx, art))
+}
+
+func storeVersionSource(reg *easyblobkit.Registry, full, version, filename string, data []byte, source string, ctx context.Context) {
+	reg.StoreVersion(ctx, easyblobkit.VersionInput{
+		Format: "swift", Repository: full, Version: version,
+		Filename: filename, Source: source, Data: data,
+	})
+}
+
+func extractPackageSwift(zipData []byte) (string, bool) {
+	zr, err := zip.NewReader(bytes.NewReader(zipData), int64(len(zipData)))
+	if err != nil {
+		return "", false
+	}
+	for _, f := range zr.File {
+		if f.Name == "Package.swift" || strings.HasSuffix(f.Name, "/Package.swift") {
+			rc, _ := f.Open()
+			buf, _ := io.ReadAll(io.LimitReader(rc, 1<<20))
+			_ = rc.Close()
+			return string(buf), true
+		}
+	}
+	return "", false
+}

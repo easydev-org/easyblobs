@@ -1,0 +1,99 @@
+package rpm
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/easydev-org/easyblobs/core"
+	"github.com/easydev-org/easyblobs/core/store"
+)
+
+// TestPullThroughRepodataAndRpm drives the adapter end to end: a repo key
+// mapped at the fake upstream serves repomd.xml and a package; both are
+// cached and served byte-for-byte.
+func TestPullThroughRepodataAndRpm(t *testing.T) {
+	repomd := []byte(`<?xml version="1.0"?><repomd><data type="primary"/></repomd>`)
+	rpmBytes := []byte("fake-rpm-bytes")
+	var gotPaths []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.URL.Path)
+		switch {
+		case strings.HasSuffix(r.URL.Path, "repomd.xml"):
+			_, _ = w.Write(repomd)
+		case strings.HasSuffix(r.URL.Path, ".rpm"):
+			_, _ = w.Write(rpmBytes)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(upstream.Close)
+
+	dir := t.TempDir()
+	meta, err := store.OpenSQLite(filepath.Join(dir, "m.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = meta.Close() })
+	blobs, err := store.NewFileBlobStore(filepath.Join(dir, "blobs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &State{
+		Registry: &easyblobkit.Registry{
+			Blobs: blobs, Meta: meta,
+			Upstreams: &easyblobkit.Upstreams{Defaults: map[string]string{}, Overrides: map[string]string{}, Proxy: map[string]string{}},
+		},
+		RepoUpstreams: map[string]string{"fedora41": upstream.URL},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/artifacts/rpm/fedora41/repodata/repomd.xml", nil)
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "repomd") {
+		t.Fatalf("repomd: %d %s", rec.Code, rec.Body.String())
+	}
+
+	req2 := httptest.NewRequest(http.MethodGet, "/artifacts/rpm/fedora41/packages/b/bash.rpm", nil)
+	rec2 := httptest.NewRecorder()
+	s.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK || !strings.Contains(rec2.Body.String(), "fake-rpm") {
+		t.Fatalf("rpm: %d", rec2.Code)
+	}
+
+	// The repo key must be part of the UPSTREAM path, not stripped: the
+	// Fedora client's base URL is dl.fedoraproject.org/pub/fedora/... and the
+	// repo key is its first segment. Dropping it fetched the wrong path.
+	for _, p := range gotPaths {
+		if !strings.HasPrefix(p, "/fedora41/") {
+			t.Errorf("upstream path %q does not carry the repo key", p)
+		}
+	}
+
+	// Both cached under (repo, repo+"/"+rest).
+	vs, err := meta.ListVersions(context.Background(), "rpm", "fedora41")
+	if err != nil || len(vs) != 2 {
+		t.Fatalf("cached versions: %v %v", vs, err)
+	}
+	for _, want := range []string{"fedora41/repodata/repomd.xml", "fedora41/packages/b/bash.rpm"} {
+		if _, err := meta.Get(context.Background(), "rpm", "fedora41", want); err != nil {
+			t.Errorf("expected cache entry %q: %v", want, err)
+		}
+	}
+
+	// Unknown repo fails closed.
+	req3 := httptest.NewRequest(http.MethodGet, "/artifacts/rpm/unknown/repodata/repomd.xml", nil)
+	rec3 := httptest.NewRecorder()
+	s.ServeHTTP(rec3, req3)
+	if rec3.Code != http.StatusNotFound {
+		t.Fatalf("unknown repo = %d", rec3.Code)
+	}
+
+	// Media types.
+	if mediaTypeOf("repodata/repomd.xml") != "application/xml" || mediaTypeOf("b/bash.rpm") != "application/x-rpm" {
+		t.Fatal("media types")
+	}
+}

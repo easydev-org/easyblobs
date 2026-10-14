@@ -1,0 +1,3 @@
+FROM forgejo.develop.10.199.64.20.nip.io/root/fedora:44
+# Fedora's dnf/rpm are native here. Only the repo config is wired at test time
+# by scripts/rpm.sh (pointed at the artifact mount's /pub/fedora/... path).

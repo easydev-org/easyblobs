@@ -1,0 +1,406 @@
+// Package composer implements the Composer repository protocol: packages.json,
+// p2 metadata, dist download with pull-through, upload, search, list. Mirror
+// of the pkglab reference.
+package composer
+
+import (
+	"archive/zip"
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"regexp"
+	"strings"
+
+	"github.com/easydev-org/easyblobs/core"
+)
+
+type State struct {
+	Registry *easyblobkit.Registry
+	Auth     easyblobkit.Auth
+	SelfBase string
+}
+
+func NewHandler(reg *easyblobkit.Registry, cfg map[string]any) (http.Handler, error) {
+	s := &State{Registry: reg}
+	if a, ok := cfg["auth"].(easyblobkit.Auth); ok {
+		s.Auth = a
+	}
+	if v, ok := cfg["self_base"].(string); ok {
+		s.SelfBase = v
+	}
+	return s, nil
+}
+
+func init() { easyblobkit.Register("composer", NewHandler) }
+
+func (s *State) base() string { return easyblobkit.SelfURL(s.SelfBase, "composer") }
+
+func (s *State) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/artifacts/composer")
+	path = strings.TrimPrefix(path, "/composer")
+	path = strings.Trim(path, "/")
+
+	switch {
+	case path == "packages.json":
+		s.packagesJSON(w, r)
+	case path == "list.json":
+		s.listJSON(w, r)
+	case path == "search.json":
+		s.search(w, r)
+	case strings.HasPrefix(path, "p2/"):
+		s.p2(w, r, strings.TrimPrefix(path, "p2/"))
+	case strings.HasPrefix(path, "p/") && !strings.HasPrefix(path, "providers/"):
+		s.provider(w, r, strings.TrimPrefix(path, "p/"))
+	case strings.HasPrefix(path, "providers/"):
+		s.providersAPI(w, r, strings.TrimPrefix(path, "providers/"))
+	case strings.HasPrefix(path, "dist/"):
+		s.dist(w, r, strings.TrimPrefix(path, "dist/"))
+	case path == "downloads" || path == "downloads/":
+		w.WriteHeader(http.StatusOK)
+	case path == "api/packages":
+		if r.Method == http.MethodPut || r.Method == http.MethodPost {
+			s.upload(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	case strings.HasPrefix(path, "api/packages/"):
+		if r.Method == http.MethodDelete {
+			s.deletePackage(w, r, strings.TrimPrefix(path, "api/packages/"))
+			return
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	default:
+		w.WriteHeader(http.StatusNotFound)
+	}
+}
+
+func (s *State) packagesJSON(w http.ResponseWriter, r *http.Request) {
+	base := s.base()
+	// Only the Composer 2 metadata (p2) protocol is advertised. Advertising
+	// providers-api makes Composer 1-era clients query /providers/<name>.json
+	// first, which this mirror does not index.
+	easyblobkit.JSON(w, http.StatusOK, map[string]any{
+		"packages":     []any{},
+		"metadata-url": base + "/p2/%package%.json",
+		"list":         base + "/list.json",
+		"search":       base + "/search.json?q=%query%&type=%type%",
+		"notify-batch": base + "/downloads/",
+	})
+}
+
+func (s *State) listJSON(w http.ResponseWriter, r *http.Request) {
+	repos, _ := s.Registry.Meta.ListRepositoriesByFormat(r.Context(), "composer")
+	filter := r.URL.Query().Get("filter")
+	filter = strings.ReplaceAll(filter, "%2A", "*")
+	var names []string
+	if filter == "" {
+		names = repos
+	} else {
+		for _, n := range repos {
+			if globMatch(n, filter) {
+				names = append(names, n)
+			}
+		}
+	}
+	easyblobkit.JSON(w, http.StatusOK, map[string]any{"packageNames": names})
+}
+
+func (s *State) search(w http.ResponseWriter, r *http.Request) {
+	q := strings.ToLower(r.URL.Query().Get("q"))
+	var results []any
+	seen := map[string]bool{}
+	repos, _ := s.Registry.Meta.ListRepositoriesByFormat(r.Context(), "composer")
+	for _, n := range repos {
+		if q != "" && !strings.Contains(strings.ToLower(n), q) {
+			continue
+		}
+		results = append(results, map[string]any{"name": n, "description": "", "url": "", "downloads": 0})
+		seen[n] = true
+	}
+	// packagist's search API lives on packagist.org, not the metadata host
+	// (repo.packagist.org/search.json 404s). Prefer the composer.search
+	// upstream when configured.
+	if remote, err := s.Registry.Remote(r.Context(), easyblobkit.UpstreamSpec{Format: "composer", Sub: "search"}); err == nil {
+		p := "/search.json"
+		if raw := r.URL.RawQuery; raw != "" {
+			p += "?" + raw
+		}
+		if body, err := remote.GetBytes(r.Context(), p); err == nil {
+			var up struct {
+				Results []map[string]any `json:"results"`
+			}
+			if json.Unmarshal(body, &up) == nil {
+				for _, m := range up.Results {
+					if n, _ := m["name"].(string); n != "" && !seen[n] {
+						results = append(results, m)
+					}
+				}
+			}
+		}
+	}
+	if results == nil {
+		results = []any{}
+	}
+	easyblobkit.JSON(w, http.StatusOK, map[string]any{"results": results, "total": len(results)})
+}
+
+func (s *State) p2(w http.ResponseWriter, r *http.Request, rest string) {
+	rest = strings.TrimSuffix(rest, ".json")
+	parts := strings.Split(rest, "/")
+	if len(parts) < 2 {
+		easyblobkit.Error(w, http.StatusNotFound, "not found")
+		return
+	}
+	full := strings.Join(parts[:2], "/")
+	versions, _ := s.Registry.Meta.ListVersions(r.Context(), "composer", full)
+	if len(versions) == 0 {
+		remote, err := s.Registry.Remote(r.Context(), easyblobkit.UpstreamSpec{Format: "composer"})
+		if err == nil {
+			if body, err := remote.GetCached(r.Context(), easyblobkit.SharedIndexCache(), "/p2/"+easyblobkit.URLencode(full)+".json"); err == nil {
+				easyblobkit.JSON(w, http.StatusOK, json.RawMessage(body))
+				return
+			}
+		}
+		easyblobkit.Error(w, http.StatusNotFound, "not found")
+		return
+	}
+	var vs []any
+	for _, v := range versions {
+		vs = append(vs, s.versionEntry(r.Context(), full, v))
+	}
+	easyblobkit.JSON(w, http.StatusOK, map[string]any{"packages": map[string]any{full: vs}})
+}
+
+func (s *State) versionEntry(ctx context.Context, name, version string) map[string]any {
+	base := s.base()
+	entry := map[string]any{
+		"name": name, "version": version, "version_normalized": normalizeVersion(version),
+		"type": "library", "uid": version,
+		"dist":    map[string]any{"type": "zip", "url": base + "/dist/" + name + "/" + easyblobkit.URLencode(version) + "/" + version + ".zip", "shasum": ""},
+		"require": map[string]any{"php": ">=7.4"},
+	}
+	if art, err := s.Registry.Meta.Get(ctx, "composer", name, version); err == nil && len(art.Proprietary) > 0 {
+		var m map[string]any
+		if json.Unmarshal(art.Proprietary, &m) == nil {
+			if al, ok := m["autoload"]; ok {
+				entry["autoload"] = al
+			}
+		}
+	}
+	return entry
+}
+
+func normalizeVersion(v string) string {
+	parts := strings.Split(v, ".")
+	for len(parts) < 4 {
+		parts = append(parts, "0")
+	}
+	return strings.Join(parts, ".")
+}
+
+func (s *State) provider(w http.ResponseWriter, r *http.Request, rest string) {
+	rest = strings.TrimSuffix(rest, ".json")
+	parts := strings.Split(rest, "/")
+	if len(parts) < 2 {
+		easyblobkit.Error(w, http.StatusNotFound, "not found")
+		return
+	}
+	full := strings.Join(parts[:2], "/")
+	versions, _ := s.Registry.Meta.ListVersions(r.Context(), "composer", full)
+	if len(versions) == 0 {
+		easyblobkit.Error(w, http.StatusNotFound, "not found")
+		return
+	}
+	var vs []any
+	for _, v := range versions {
+		vs = append(vs, s.versionEntry(r.Context(), full, v))
+	}
+	easyblobkit.JSON(w, http.StatusOK, map[string]any{"packages": map[string]any{full: vs}})
+}
+
+func (s *State) providersAPI(w http.ResponseWriter, r *http.Request, rest string) {
+	// Proxy the upstream providers listing: it enumerates every version of a
+	// package, so serving an empty map here makes the client believe the
+	// package does not exist. Locally-published packages are still served by
+	// p2/<name>/<version>.json, which the client queries first.
+	rest = strings.Trim(rest, "/")
+	if remote, err := s.Registry.Remote(r.Context(), easyblobkit.UpstreamSpec{Format: "composer"}); err == nil {
+		if body, err := remote.GetBytes(r.Context(), "/providers/"+rest); err == nil {
+			easyblobkit.JSON(w, http.StatusOK, json.RawMessage(body))
+			return
+		}
+	}
+	easyblobkit.JSON(w, http.StatusOK, map[string]any{"providers": map[string]any{}})
+}
+
+func (s *State) dist(w http.ResponseWriter, r *http.Request, rest string) {
+	rep := strings.Trim(rest, "/")
+	parts := strings.Split(rep, "/")
+	if len(parts) < 3 {
+		easyblobkit.Error(w, http.StatusNotFound, "not found")
+		return
+	}
+	version, ref := parts[len(parts)-2], parts[len(parts)-1]
+	full := strings.Join(parts[:len(parts)-2], "/")
+	short := full[strings.LastIndex(full, "/")+1:]
+	filename := short + "-" + version + ".zip"
+	if art, err := s.Registry.Meta.Get(r.Context(), "composer", full, version); err == nil {
+		for _, b := range art.Blobs {
+			if easyblobkit.ServeBlobAtNamed(w, r, s.Registry.Blobs, r.Context(), b.Digest, "application/octet-stream", filename) {
+				return
+			}
+		}
+	}
+	// Stream the dist zip into the CAS (no full buffering of a large archive).
+	br := s.Registry.FetchToBlobResult(r.Context(), "composer", "/dist/"+full+"/"+version+"/"+ref)
+	if !br.OK {
+		easyblobkit.WriteBlobResultError(w, br)
+		return
+	}
+	digest, size := br.Digest, br.Size
+	storeVersionBlob(s.Registry, full, version, filename, digest, size, "pull", r.Context())
+	if easyblobkit.ServeBlobAtNamed(w, r, s.Registry.Blobs, r.Context(), digest, "application/octet-stream", filename) {
+		return
+	}
+	easyblobkit.Error(w, http.StatusBadGateway, "cache error")
+}
+
+func (s *State) upload(w http.ResponseWriter, r *http.Request) {
+	if !easyblobkit.AuthorizeWriteScoped(w, r, s.Auth, s.Registry, "composer") {
+		return
+	}
+	easyblobkit.LimitBody(w, r)
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		easyblobkit.WriteReadErr(w, err)
+		return
+	}
+	name, version := composerJSONNameVersion(data)
+	if name == "" {
+		name = "vendor/pkg"
+	}
+	if version == "" {
+		version = "0.1.0"
+	}
+	storeVersionSource(s.Registry, name, version, data, "push", r.Context())
+	easyblobkit.JSON(w, http.StatusCreated, map[string]any{"ok": true})
+}
+
+func (s *State) deletePackage(w http.ResponseWriter, r *http.Request, rest string) {
+	if !easyblobkit.AuthorizeWriteScoped(w, r, s.Auth, s.Registry, "composer") {
+		return
+	}
+	full := strings.Trim(rest, "/")
+	full = strings.ReplaceAll(full, "/", "/")
+	vs, _ := s.Registry.Meta.ListVersions(r.Context(), "composer", full)
+	for _, v := range vs {
+		removeVersion(s.Registry, full, v, r.Context())
+	}
+	easyblobkit.JSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func removeVersion(reg *easyblobkit.Registry, name, version string, ctx context.Context) {
+	if art, err := reg.Meta.Get(ctx, "composer", name, version); err == nil {
+		for _, b := range art.Blobs {
+			easyblobkit.LogMetaErr("blob delete", reg.Blobs.Delete(ctx, b.Digest))
+		}
+	}
+	easyblobkit.LogMetaErr("meta delete", reg.Meta.Delete(ctx, "composer", name, version))
+}
+
+// storeVersionBlob records a dist zip already streamed into the CAS. It must
+// not clobber an existing entry's autoload metadata (Proprietary), which only
+// the composer.json path knows.
+func storeVersionBlob(reg *easyblobkit.Registry, name, version, filename, digest string, size int64, source string, ctx context.Context) {
+	art, _ := reg.Meta.Get(ctx, "composer", name, version)
+	if art.Format == "" {
+		art = easyblobkit.Artifact{Format: "composer", Repository: name, Version: version, Source: source}
+	}
+	var kept []easyblobkit.Descriptor
+	for _, b := range art.Blobs {
+		if b.Name != filename {
+			kept = append(kept, b)
+		}
+	}
+	art.Blobs = append(kept, easyblobkit.Descriptor{Digest: digest, Size: size, Name: filename})
+	easyblobkit.LogMetaErr("meta put", reg.Meta.Put(ctx, art))
+}
+
+func storeVersionSource(reg *easyblobkit.Registry, name, version string, data []byte, source string, ctx context.Context) {
+	short := name[strings.LastIndex(name, "/")+1:]
+	var prop []byte
+	if al := extractAutoload(data); al != nil {
+		prop, _ = json.Marshal(map[string]any{"autoload": al})
+	}
+	reg.StoreVersion(ctx, easyblobkit.VersionInput{
+		Format: "composer", Repository: name, Version: version,
+		Filename: short + "-" + version + ".zip", Source: source, Data: data,
+		Proprietary: prop,
+	})
+}
+
+func composerJSONNameVersion(data []byte) (string, string) {
+	b, ok := composerJSONBytes(data)
+	if !ok {
+		return "", ""
+	}
+	var m map[string]any
+	if json.Unmarshal(b, &m) != nil {
+		return "", ""
+	}
+	name, _ := m["name"].(string)
+	version, _ := m["version"].(string)
+	return name, version
+}
+
+func composerJSONBytes(data []byte) ([]byte, bool) {
+	if len(data) >= 2 && data[0] == 'P' && data[1] == 'K' {
+		zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+		if err != nil {
+			return data, false
+		}
+		for _, f := range zr.File {
+			if f.Name == "composer.json" {
+				rc, _ := f.Open()
+				buf, _ := io.ReadAll(io.LimitReader(rc, 1<<20))
+				_ = rc.Close()
+				return buf, true
+			}
+		}
+		return data, false
+	}
+	return data, json.Valid(data)
+}
+
+func extractAutoload(data []byte) map[string]any {
+	b, ok := composerJSONBytes(data)
+	if !ok {
+		return nil
+	}
+	var m map[string]any
+	if json.Unmarshal(b, &m) != nil {
+		return nil
+	}
+	al, _ := m["autoload"].(map[string]any)
+	return al
+}
+
+func globMatch(name, pattern string) bool {
+	// Convert a simple glob (*, ?) to matched via regex-lite.
+	re := "^"
+	for _, c := range pattern {
+		switch c {
+		case '*':
+			re += ".*"
+		case '?':
+			re += "."
+		default:
+			re += strings.ReplaceAll(string(c), ".", `\.`)
+		}
+	}
+	re += "$"
+	matched, _ := regexp.MatchString(re, name)
+	return matched
+}

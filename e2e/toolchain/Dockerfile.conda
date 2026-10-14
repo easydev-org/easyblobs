@@ -1,0 +1,6 @@
+ARG BASE_IMAGE=forgejo.develop.10.199.64.20.nip.io/easy-platform/toolchain-base:latest
+FROM ${BASE_IMAGE}
+ARG EASYLAB=http://easy-platform.temp.svc.cluster.local
+RUN curl -fsSL -o /tmp/miniconda.sh "${EASYLAB}/pkgs/generic/miniconda/latest/Miniconda3-latest-Linux-x86_64.sh" \
+ && bash /tmp/miniconda.sh -b -p /opt/miniconda && rm /tmp/miniconda.sh
+ENV PATH=/opt/miniconda/bin:$PATH

@@ -1,0 +1,8 @@
+# build outputs
+/easyblobs
+/artifact
+/cmd/easyblobs
+node_modules/
+webui/node_modules/
+*.test
+/data/
