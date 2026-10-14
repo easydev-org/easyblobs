@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// The SPA (Svelte 5 + Vite + Tailwind, built by ../webui → ./ui/dist) is
+// The SPA (Svelte 5 + Vite + Tailwind, built by the easyblobs-webui repo (https://github.com/easydev-org/easyblobs-webui) → ./ui/dist) is
 // embedded so the binary serves it with no external files. `all:` includes the
 // Vite hashed assets. The build is committed, so `go build` needs no node.
 //
