@@ -6,3 +6,4 @@ node_modules/
 webui/node_modules/
 *.test
 /data/
+dist/

@@ -7,9 +7,10 @@ import (
 	"strings"
 )
 
-// The SPA (Svelte 5 + Vite + Tailwind, built by the easyblobs-webui repo (https://github.com/easydev-org/easyblobs-webui) → ./ui/dist) is
-// embedded so the binary serves it with no external files. `all:` includes the
-// Vite hashed assets. The build is committed, so `go build` needs no node.
+// The SPA (Svelte 5 + Vite + Tailwind, from the easyblobs-webui repo,
+// github.com/easydev-org/easyblobs-webui) is embedded so the binary serves it
+// with no external files. `all:` includes the Vite hashed assets. ui/dist is
+// built by the Containerfile's node stage (it is NOT committed).
 //
 //go:embed all:ui/dist
 var uiDist embed.FS

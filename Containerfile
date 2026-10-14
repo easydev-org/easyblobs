@@ -18,6 +18,20 @@ ARG ALPINE=3.24
 # dl-cdn.alpinelinux.org is unreachable/slow in-cluster; point it at artifact.
 ARG APK_MIRROR=http://artifact.worker.svc.cluster.local/artifacts/apk/alpine
 
+# ---- webui (node) ----
+# Build the admin SPA from the easyblobs-webui repo (ui/dist is NOT committed).
+FROM ${REGISTRY}/node:22-alpine AS webui
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG EASYBLOBS_WEBUI_REPO=https://github.com/easydev-org/easyblobs-webui.git
+ARG EASYBLOBS_WEBUI_REF=main
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=localhost,127.0.0.1,.svc.cluster.local,.svc,.nip.io,10.199.64.20,.develop.10.199.64.20.nip.io
+RUN apk add --no-cache git ca-certificates \
+    && git clone --depth 1 --branch "${EASYBLOBS_WEBUI_REF}" "${EASYBLOBS_WEBUI_REPO}" /webui \
+    && cd /webui && npm ci --no-audit --no-fund && OUT_DIR=dist npm run build
+
 # ---- build ----
 FROM ${REGISTRY}/golang:1.26-alpine AS build
 ARG APK_MIRROR=http://artifact.worker.svc.cluster.local/artifacts/apk/alpine
@@ -40,6 +54,8 @@ RUN printf '%s/v3.24/main\n%s/v3.24/community\n' "${APK_MIRROR}" "${APK_MIRROR}"
     && env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy apk add --no-cache ca-certificates git
 WORKDIR /src
 COPY . .
+# Place the SPA at the go:embed path (system/ui/dist) before the Go build.
+COPY --from=webui /webui/dist/ system/ui/dist/
 # cmd/ is the server module: with GOWORK=off its replace directives resolve
 # every sibling protocol module from the copied tree; third-party deps come
 # from GOPROXY over the build proxy.

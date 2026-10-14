@@ -1,0 +1,35 @@
+# easyblobs — BUILD ARTIFACTS only (no container image).
+#
+# Multi-stage: build the admin SPA from easyblobs-webui, then the Go binary
+# (cmd/, with the SPA embedded), and export BOTH with `--output type=local`:
+#   buildctl ... --opt filename=Containerfile.build --output type=local,dest=./dist
+#   # -> dist/easyblobs  dist/ui/
+ARG REGISTRY=docker.io/library
+
+# ---- webui (node) ----
+FROM ${REGISTRY}/node:22-alpine AS webui
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG EASYBLOBS_WEBUI_REPO=https://github.com/easydev-org/easyblobs-webui.git
+ARG EASYBLOBS_WEBUI_REF=main
+ENV HTTP_PROXY=${HTTP_PROXY} HTTPS_PROXY=${HTTPS_PROXY}
+RUN apk add --no-cache git ca-certificates \
+    && git clone --depth 1 --branch "${EASYBLOBS_WEBUI_REF}" "${EASYBLOBS_WEBUI_REPO}" /webui \
+    && cd /webui && npm ci --no-audit --no-fund && OUT_DIR=dist npm run build
+
+# ---- build (go) ----
+FROM ${REGISTRY}/golang:1.26-alpine AS build
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG GOPROXY=https://proxy.golang.org
+ENV HTTP_PROXY=${HTTP_PROXY} HTTPS_PROXY=${HTTPS_PROXY} \
+    GOPROXY=${GOPROXY} GOSUMDB=off GOWORK=off CGO_ENABLED=0
+WORKDIR /src
+COPY . .
+COPY --from=webui /webui/dist/ system/ui/dist/
+RUN cd cmd && go build -mod=mod -trimpath -ldflags="-s -w" -o /out/easyblobs .
+
+# ---- artifacts (no image) ----
+FROM scratch AS artifacts
+COPY --from=build /out/easyblobs /bin/easyblobs
+COPY --from=webui /webui/dist /ui
