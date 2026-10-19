@@ -44,6 +44,14 @@ func refreshFrom304(art *Artifact, h http.Header, ttl time.Duration) {
 	}
 	if v := h.Get("Last-Modified"); v != "" {
 		art.LastModified = v
+		if t, err := http.ParseTime(v); err == nil {
+			art.PublishedAt = t
+		}
+	}
+	// StoredAt is when we first cached it; a 304 does not change that. Backfill
+	// it for entries that predate the field.
+	if art.StoredAt.IsZero() {
+		art.StoredAt = time.Now()
 	}
 	if art.CacheControl != "immutable" {
 		art.ExpiresAt = time.Now().Add(ttl)
@@ -54,6 +62,7 @@ func refreshFrom304(art *Artifact, h http.Header, ttl time.Duration) {
 // the bytes already streamed into the CAS. immutable pins CacheControl; else
 // ExpiresAt is now+ttl.
 func artifactFromResponse(format, repo, version string, digest string, size int64, h http.Header, mediaType, blobName string, immutable bool, ttl time.Duration) Artifact {
+	now := time.Now()
 	art := Artifact{
 		Format: format, Repository: repo, Version: version,
 		MediaType:       mediaType,
@@ -63,6 +72,13 @@ func artifactFromResponse(format, repo, version string, digest string, size int6
 		ContentEncoding: h.Get("Content-Encoding"),
 		Blobs:           []Descriptor{{Digest: digest, Size: size, Name: blobName}},
 		Source:          "pull",
+		StoredAt:        now,
+	}
+	// PublishedAt: the upstream's Last-Modified is the best generic signal.
+	// Protocol adapters that learn a more precise time (npm `time`, PyPI
+	// `upload_time`, OCI `created`) overwrite it before persisting.
+	if t, err := http.ParseTime(art.LastModified); err == nil {
+		art.PublishedAt = t
 	}
 	if immutable {
 		art.CacheControl = "immutable"

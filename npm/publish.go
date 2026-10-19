@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/easydev-org/easyblobs/core"
 )
@@ -92,6 +93,12 @@ func (s *State) publish(w http.ResponseWriter, r *http.Request, name string) {
 }
 
 func (s *State) storeVersion(ctx context.Context, name, version string, tarball []byte, pkgJSON map[string]any, source string) {
+	s.storeVersionAt(ctx, name, version, tarball, pkgJSON, source, time.Time{})
+}
+
+// storeVersionAt is storeVersion with an explicit publish time (from the
+// packument's `time` map on a pull-through); zero falls back to now.
+func (s *State) storeVersionAt(ctx context.Context, name, version string, tarball []byte, pkgJSON map[string]any, source string, publishedAt time.Time) {
 	if name == "" {
 		name = "unknown"
 	}
@@ -102,10 +109,14 @@ func (s *State) storeVersion(ctx context.Context, name, version string, tarball 
 	if pkgJSON != nil {
 		prop, _ = json.Marshal(pkgJSON)
 	}
+	if publishedAt.IsZero() {
+		publishedAt = time.Now().UTC()
+	}
 	s.Registry.StoreVersion(ctx, easyblobkit.VersionInput{
 		Format: "npm", Repository: name, Version: version,
 		MediaType: "application/json", Filename: tarballFilename(name, version),
 		Source: source, Data: tarball, Proprietary: prop,
+		PublishedAt: publishedAt,
 	})
 }
 

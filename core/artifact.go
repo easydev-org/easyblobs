@@ -60,6 +60,16 @@ type Artifact struct {
 	// ExpiresAt, when non-zero, is when a non-immutable entry must be
 	// revalidated before being served again.
 	ExpiresAt time.Time
+	// StoredAt is when this version entered our store (fetch time for a
+	// pull-through cache, upload time for a hosted publish). Zero when unknown
+	// (rows written before this field existed).
+	StoredAt time.Time
+	// PublishedAt is when the upstream published this version, when we can
+	// learn it: a protocol field (npm packument `time`, PyPI `upload_time`, OCI
+	// config `created`, Helm `created`) if present, else the HTTP
+	// `Last-Modified`. Zero when unknown. It is the "package updated" time; for
+	// a hosted publish it falls back to StoredAt.
+	PublishedAt time.Time
 }
 
 type PackageSummary struct {
@@ -86,4 +96,9 @@ type PackageSummary struct {
 	// namespace ("easy-vcs/agent-gateway" -> "agent-gateway"). A UI joins
 	// (Namespace, Repo) to a repository and lists its packages/releases.
 	Repo string `json:"repo,omitempty"`
+	// StoredAt is when this version entered the store (unix seconds; 0 when
+	// unknown). PublishedAt is the upstream publish time when known (unix
+	// seconds; 0 when unknown) — the "package updated" time.
+	StoredAt    int64 `json:"stored_at,omitempty"`
+	PublishedAt int64 `json:"published_at,omitempty"`
 }

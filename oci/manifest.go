@@ -215,10 +215,12 @@ func (a *Adapter) getManifest(w http.ResponseWriter, r *http.Request, name, ref 
 			blobs := extractBlobs(mbody)
 			// Store the digest row as immutable (it can never change) and the
 			// tag row with a TTL (the tag may be re-pushed upstream).
+			now := time.Now().UTC()
 			dgRow := easyblobkit.Artifact{
 				Format: "oci", Repository: name, Version: dgst,
 				MediaType: ct, Proprietary: mbody, Digest: dgst, Blobs: blobs,
 				Source: "pull", CacheControl: easyblobkit.ImmutableTag,
+				StoredAt: now, PublishedAt: manifestCreated(mbody, now),
 			}
 			easyblobkit.LogMetaErr("oci pull cache", a.state.Registry.Meta.Put(r.Context(), dgRow))
 			if !byDigest {
@@ -267,8 +269,10 @@ func (a *Adapter) putManifest(w http.ResponseWriter, r *http.Request, name, ref 
 		}
 	}
 	blobs := extractBlobs(body)
+	now := time.Now().UTC()
 	art := easyblobkit.Artifact{Format: "oci", Repository: name, Version: ref,
-		MediaType: mt, Proprietary: body, Digest: eff, Blobs: blobs, Source: "push"}
+		MediaType: mt, Proprietary: body, Digest: eff, Blobs: blobs, Source: "push",
+		StoredAt: now, PublishedAt: now}
 	if err := a.state.Registry.Meta.Put(r.Context(), art); err != nil {
 		writeJSON(w, http.StatusInternalServerError, ociError("UNKNOWN", err.Error()))
 		return
@@ -287,4 +291,31 @@ func (a *Adapter) putManifest(w http.ResponseWriter, r *http.Request, name, ref 
 	w.Header().Set("Docker-Content-Digest", eff)
 	w.Header().Set("Location", "/v2/"+name+"/manifests/"+eff)
 	w.WriteHeader(http.StatusCreated)
+}
+
+// manifestCreated returns the image's creation time from an OCI manifest, when
+// present: the `org.opencontainers.image.created` annotation (RFC3339), else the
+// config descriptor's inline `created` (some registries inline the config).
+// Falls back to def (the fetch time) when neither is present.
+func manifestCreated(manifest []byte, def time.Time) time.Time {
+	var m struct {
+		Annotations map[string]string `json:"annotations"`
+		Config      struct {
+			Created string `json:"created"`
+		} `json:"config"`
+	}
+	if json.Unmarshal(manifest, &m) != nil {
+		return def
+	}
+	if v := m.Annotations["org.opencontainers.image.created"]; v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			return t
+		}
+	}
+	if m.Config.Created != "" {
+		if t, err := time.Parse(time.RFC3339, m.Config.Created); err == nil {
+			return t
+		}
+	}
+	return def
 }

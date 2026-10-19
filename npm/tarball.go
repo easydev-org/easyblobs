@@ -36,7 +36,7 @@ func (s *State) tarball(w http.ResponseWriter, r *http.Request, name, file strin
 		easyblobkit.Error(w, http.StatusNotFound, "tarball not found")
 		return
 	}
-	data, err := s.fetchTarball(r.Context(), remote, name, file)
+	data, pub, err := s.fetchTarball(r.Context(), remote, name, file)
 	if err != nil {
 		s.tarballErr(w, err)
 		return
@@ -45,7 +45,7 @@ func (s *State) tarball(w http.ResponseWriter, r *http.Request, name, file strin
 	if ver == "" {
 		ver = versionFromTarballName(file, name)
 	}
-	s.storeVersion(r.Context(), name, ver, data, pkgJSON, "pull")
+	s.storeVersionAt(r.Context(), name, ver, data, pkgJSON, "pull", pub)
 	easyblobkit.ServeData(w, r, s.Registry, r.Context(), data, "application/octet-stream", file)
 }
 
@@ -61,7 +61,7 @@ const tarballFetchAttempts = 3
 // tries the conventional "/<name>/-/<file>" path first, then the packument's
 // dist.tarball (JSR's npm-compatibility layer serves the tarball at a
 // registry-specific URL).
-func (s *State) fetchTarball(ctx context.Context, remote *easyblobkit.Remote, name, file string) ([]byte, error) {
+func (s *State) fetchTarball(ctx context.Context, remote *easyblobkit.Remote, name, file string) ([]byte, time.Time, error) {
 	var lastErr error
 	for attempt := 0; attempt < tarballFetchAttempts; attempt++ {
 		if attempt > 0 {
@@ -69,31 +69,31 @@ func (s *State) fetchTarball(ctx context.Context, remote *easyblobkit.Remote, na
 		}
 		data, err := remote.GetBytes(ctx, "/"+encodeName(name)+"/-/"+file)
 		if err == nil {
-			return data, nil
+			return data, time.Time{}, nil
 		}
 		// A transient failure is already core-exhausted; do not also query the
 		// packument (it would fail the same way) — surface it as 503 below.
 		if !isTarballNotFound(err) {
-			return nil, err
+			return nil, time.Time{}, err
 		}
 		// Conventional path 404'd: a JSR-style registry serves the tarball at a
 		// registry-specific URL in the packument's dist.tarball. Try it.
-		data, perr := s.tarballFromPackument(ctx, remote, name, file)
+		data, pub, perr := s.tarballFromPackument(ctx, remote, name, file)
 		if perr == nil {
-			return data, nil
+			return data, pub, nil
 		}
 		lastErr = perr
 		// Definitive: the version's tarball is not in the packument at all.
 		if errors.Is(perr, errNoTarball) {
-			return nil, perr
+			return nil, time.Time{}, perr
 		}
 		// A transient failure on the packument fetch is likewise surfaced as 503.
 		if !isTarballNotFound(perr) {
-			return nil, perr
+			return nil, time.Time{}, perr
 		}
 		// Both paths 404'd: retry (tarballs are immutable — a blip clears).
 	}
-	return nil, lastErr
+	return nil, time.Time{}, lastErr
 }
 
 // isTarballNotFound reports whether a failed tarball fetch is a definitive 404
@@ -125,14 +125,14 @@ func (s *State) tarballErr(w http.ResponseWriter, err error) {
 // conventional "/<name>/-/<file>" path: the tarball lives at a
 // registry-specific URL carried in the packument. We derive the version from
 // the requested filename and fetch that version's dist.tarball.
-func (s *State) tarballFromPackument(ctx context.Context, remote *easyblobkit.Remote, name, file string) ([]byte, error) {
+func (s *State) tarballFromPackument(ctx context.Context, remote *easyblobkit.Remote, name, file string) ([]byte, time.Time, error) {
 	ver := versionFromTarballName(file, name)
 	if ver == "" {
-		return nil, errNoTarball
+		return nil, time.Time{}, errNoTarball
 	}
 	body, err := remote.GetBytes(ctx, "/"+encodeName(name))
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	var doc struct {
 		Versions map[string]struct {
@@ -140,15 +140,24 @@ func (s *State) tarballFromPackument(ctx context.Context, remote *easyblobkit.Re
 				Tarball string `json:"tarball"`
 			} `json:"dist"`
 		} `json:"versions"`
+		// The packument's `time` map: {"created":…, "modified":…, "<version>":…}.
+		Time map[string]string `json:"time"`
 	}
 	if json.Unmarshal(body, &doc) != nil {
-		return nil, errNoTarball
+		return nil, time.Time{}, errNoTarball
 	}
 	v, ok := doc.Versions[ver]
 	if !ok || v.Dist.Tarball == "" {
-		return nil, errNoTarball
+		return nil, time.Time{}, errNoTarball
 	}
-	return s.Registry.FetchAbsoluteBytes(ctx, v.Dist.Tarball)
+	var pub time.Time
+	if ts := doc.Time[ver]; ts != "" {
+		if t, perr := time.Parse(time.RFC3339, ts); perr == nil {
+			pub = t
+		}
+	}
+	data, err := s.Registry.FetchAbsoluteBytes(ctx, v.Dist.Tarball)
+	return data, pub, err
 }
 
 // errNoTarballType is a sentinel error for the packument fallback.

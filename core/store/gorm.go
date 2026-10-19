@@ -49,6 +49,10 @@ type artifactRow struct {
 	// ExpiresAt is indexed so the reaper's expiry sweep is a range scan, not a
 	// table scan.
 	ExpiresAt int64 `gorm:"not null;default:0;index"`
+	// StoredAt / PublishedAt are unix seconds. Indexed so listings can sort /
+	// range-scan by "package updated" time.
+	StoredAt    int64 `gorm:"not null;default:0;index"`
+	PublishedAt int64 `gorm:"not null;default:0;index"`
 }
 
 type uploadRow struct {

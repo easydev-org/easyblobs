@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net/http"
 	"strings"
+	"time"
 )
 
 // StoreAndHash writes into the blob store (dedup by sha256) and returns a summary.
@@ -77,7 +79,7 @@ func (r *Registry) StorePathBlob(ctx context.Context, format, repository, versio
 		Format: format, Repository: repository, Version: version,
 		MediaType: mediaType, Digest: stored.Digest,
 		Blobs:  []Descriptor{{Digest: stored.Digest, Size: stored.Size, Name: blobName}},
-		Source: "pull",
+		Source: "pull", StoredAt: time.Now(),
 	}))
 	return stored.Digest
 }
@@ -110,6 +112,11 @@ type VersionInput struct {
 	// DefaultVersion is applied when Version is empty (per-format, e.g.
 	// "0.1.0"). Empty leaves Version as-is.
 	DefaultVersion string
+	// PublishedAt, when non-zero, is the upstream publish time the adapter
+	// learned from a protocol field (npm `time`, PyPI `upload_time`, OCI
+	// `created`, Helm `created`). Zero falls back to the HTTP Last-Modified, and
+	// finally to StoredAt.
+	PublishedAt time.Time
 }
 
 // StoreVersion persists one artifact version: stream the content into the CAS,
@@ -155,6 +162,21 @@ func (r *Registry) StoreVersion(ctx context.Context, in VersionInput) {
 		}
 	}
 	art.Blobs = append(art.Blobs, in.ExtraBlobs...)
+	// Timestamps: StoredAt is "now" for a new row (keep the first-seen time for
+	// an existing one). PublishedAt prefers the adapter's protocol field, then
+	// the Last-Modified already on the row, then StoredAt.
+	if art.StoredAt.IsZero() {
+		art.StoredAt = time.Now()
+	}
+	if !in.PublishedAt.IsZero() {
+		art.PublishedAt = in.PublishedAt
+	} else if art.PublishedAt.IsZero() {
+		if t, err := http.ParseTime(art.LastModified); err == nil {
+			art.PublishedAt = t
+		} else {
+			art.PublishedAt = art.StoredAt
+		}
+	}
 	LogMetaErr(in.Format+" meta put", r.Meta.Put(ctx, art))
 }
 

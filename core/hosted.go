@@ -8,6 +8,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Hosted repository support. A hosted (self-published) repository is addressed
@@ -135,11 +136,12 @@ func (h HostedStore) HostedUpload(ctx context.Context, format, repo, name string
 	if err != nil {
 		return "", 0, err
 	}
+	now := time.Now()
 	if err := h.Registry.Meta.Put(ctx, Artifact{
 		Format: format, Repository: repoKey(repo), Version: name,
 		MediaType: "application/octet-stream", Digest: stored.Digest,
 		Blobs:  []Descriptor{{Digest: stored.Digest, Size: stored.Size, Name: baseName(name)}},
-		Source: "push",
+		Source: "push", StoredAt: now, PublishedAt: now,
 	}); err != nil {
 		return "", 0, err
 	}

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/easydev-org/easyblobs/core"
 )
@@ -68,10 +69,12 @@ func (s *State) storeVersion(name, version, filename string, data []byte, source
 	if version == "" {
 		version = "0.1.0"
 	}
+	now := time.Now().UTC()
+	prop, _ := json.Marshal(map[string]string{"upload_time": now.Format("2006-01-02T15:04:05.000000Z")})
 	s.Registry.StoreVersion(ctx, easyblobkit.VersionInput{
 		Format: "pypi", Repository: name, Version: version,
 		Filename: filename, Source: source, Data: data,
-		Proprietary: []byte(`{"upload_time":"2024-01-01T00:00:00.000000Z"}`),
+		Proprietary: prop, PublishedAt: now,
 	})
 }
 

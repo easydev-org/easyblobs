@@ -98,6 +98,7 @@ func (s *Store) Put(ctx context.Context, a easyblobkit.Artifact) error {
 		ETag: a.ETag, LastModified: a.LastModified,
 		ContentEncoding: a.ContentEncoding, CacheControl: a.CacheControl,
 		ExpiresAt: a.ExpiresAt.Unix(),
+		StoredAt:  unixOrZero(a.StoredAt), PublishedAt: unixOrZero(a.PublishedAt),
 	}
 	return s.db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "format"}, {Name: "repository"}, {Name: "version"}},
@@ -118,6 +119,15 @@ func (s *Store) Get(ctx context.Context, format, repository, version string) (ea
 	return artifactFromRow(&row), nil
 }
 
+// unixOrZero maps a time to unix seconds, or 0 for the zero time (so "unknown"
+// is stored as 0, not a negative epoch).
+func unixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
+}
+
 // artifactFromRow maps a persisted row onto the in-memory Artifact.
 func artifactFromRow(row *artifactRow) easyblobkit.Artifact {
 	var a easyblobkit.Artifact
@@ -129,6 +139,12 @@ func artifactFromRow(row *artifactRow) easyblobkit.Artifact {
 	a.ContentEncoding, a.CacheControl = row.ContentEncoding, row.CacheControl
 	if row.ExpiresAt > 0 {
 		a.ExpiresAt = time.Unix(row.ExpiresAt, 0)
+	}
+	if row.StoredAt > 0 {
+		a.StoredAt = time.Unix(row.StoredAt, 0)
+	}
+	if row.PublishedAt > 0 {
+		a.PublishedAt = time.Unix(row.PublishedAt, 0)
 	}
 	a.Proprietary = row.Proprietary
 	return a
@@ -210,6 +226,7 @@ func (s *Store) ListPackages(ctx context.Context) ([]easyblobkit.PackageSummary,
 			MediaType: rows[i].MediaType, Digest: rows[i].Digest, Size: int64(len(des)),
 			Source: rows[i].Source, Hosted: rows[i].Source == "push",
 			Namespace: ns, Repo: repoName,
+			StoredAt: rows[i].StoredAt, PublishedAt: rows[i].PublishedAt,
 		})
 	}
 	return out, nil

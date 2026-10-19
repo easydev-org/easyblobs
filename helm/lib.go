@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/easydev-org/easyblobs/core"
 )
@@ -202,6 +203,7 @@ func storeChart(reg *easyblobkit.Registry, name, version, filename string, data 
 	reg.StoreVersion(ctx, easyblobkit.VersionInput{
 		Format: "helm", Repository: name, Version: version,
 		Filename: filename, Data: data,
+		PublishedAt: time.Now().UTC(),
 	})
 }
 
