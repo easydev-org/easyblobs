@@ -55,6 +55,11 @@ type State struct {
 	Auth     easyblobkit.Auth
 	// Tree is the format this handler serves (hackage, cran, cpan, luarocks).
 	Tree string
+	// Hosted serves /artifacts/<tree>/_hosted/<repo>/... (self-published files
+	// plus a generated index). A hosted repo is addressed under the reserved
+	// "_hosted" segment, so it can never be confused with the pull-through
+	// cache of the same path.
+	Hosted *easyblobkit.HostedHandler
 }
 
 func newHandler(tree string) func(reg *easyblobkit.Registry, cfg map[string]any) (http.Handler, error) {
@@ -63,6 +68,12 @@ func newHandler(tree string) func(reg *easyblobkit.Registry, cfg map[string]any)
 		if a, ok := cfg["auth"].(easyblobkit.Auth); ok {
 			s.Auth = a
 		}
+		s.Hosted = &easyblobkit.HostedHandler{
+			Format:    tree,
+			Store:     easyblobkit.HostedStore{Registry: reg},
+			Auth:      s.Auth,
+			Generator: GenerateTreeIndex(easyblobkit.HostedStore{Registry: reg}, tree),
+		}
 		return s, nil
 	}
 }
@@ -70,11 +81,21 @@ func newHandler(tree string) func(reg *easyblobkit.Registry, cfg map[string]any)
 func init() {
 	for _, tree := range trees {
 		easyblobkit.Register(tree, newHandler(tree))
+		// A hosted repo's namespace is its first path segment, so per-repo
+		// authorization and upstream overrides work like the system formats.
+		easyblobkit.RegisterNamespace(tree, easyblobkit.FirstSegNamespace)
 	}
 }
 
-// ServeHTTP serves one tree path, cache-first.
+// ServeHTTP serves one tree path, cache-first. A hosted (self-published) repo
+// is addressed under the reserved "_hosted/<repo>/" segment and handled by the
+// HostedHandler (upload / download / generated index); every other path is a
+// read-only pull-through cache.
 func (s *State) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if repo, sub, hosted := easyblobkit.HostedRequest(r, "/artifacts/"+s.Tree); hosted {
+		s.serveHosted(w, r, repo, sub)
+		return
+	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -101,6 +122,20 @@ func (s *State) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	easyblobkit.Error(w, http.StatusBadGateway, "cache error")
+}
+
+// serveHosted routes an upload/download/delete on a self-published repository.
+func (s *State) serveHosted(w http.ResponseWriter, r *http.Request, repo, rest string) {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+		s.Hosted.Get(w, r, repo, rest)
+	case http.MethodPut:
+		s.Hosted.Put(w, r, repo, rest)
+	case http.MethodDelete:
+		s.Hosted.Delete(w, r, repo, rest)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
 }
 
 func pathBase(p string) string {
