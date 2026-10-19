@@ -10,7 +10,6 @@ use (
 	./core
 	./debian
 	./generic
-	./git
 	./gitlfs
 	./go
 	./helm

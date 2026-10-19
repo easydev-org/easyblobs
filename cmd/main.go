@@ -330,11 +330,6 @@ func configFor(name, selfBase string, auth easyblobkit.Auth, dataDir string, met
 		// when blobs are remote.
 		cfg["uploads"] = uploads
 	}
-	if name == "git" {
-		// Bare mirrors live under the data dir: the second clone of a
-		// repository is served from local objects.
-		cfg["dir"] = filepath.Join(dataDir, "git")
-	}
 	if name == "system" && meta != nil {
 		// The admin API can CRUD user-declared targets and report footprint.
 		cfg["targets_store"] = meta

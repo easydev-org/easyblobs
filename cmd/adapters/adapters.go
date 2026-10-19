@@ -11,7 +11,6 @@ import (
 	_ "github.com/easydev-org/easyblobs/conda"
 	_ "github.com/easydev-org/easyblobs/debian"
 	_ "github.com/easydev-org/easyblobs/generic"
-	_ "github.com/easydev-org/easyblobs/git"
 	_ "github.com/easydev-org/easyblobs/gitlfs"
 	_ "github.com/easydev-org/easyblobs/go"
 	_ "github.com/easydev-org/easyblobs/helm"

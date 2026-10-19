@@ -50,11 +50,17 @@ EASYBLOBS_S3_PREFIX=easyblobs \
 Putting both together gives a fully stateless instance: metadata in Postgres,
 blobs in S3, nothing on local disk.
 
-### Still local (needs a persistent volume)
+### Fully stateless with postgres + S3
 
-One thing is **not** stateless and stays under `--data`:
+With `EASYBLOBS_DB_DRIVER=postgres` and `--blob-backend=s3` there is **nothing
+that must stay on local disk**: metadata lives in Postgres, blobs (including
+OCI layers and Git LFS objects) live in the S3 bucket, and in-progress OCI
+uploads are staged in that same bucket.
 
-- `<data>/git` — bare git mirrors (kept local on purpose).
+> The git **proxy** (a local `git clone --mirror` cache per repository) has
+> been removed — it was the only component that required a local filesystem.
+> The **Git LFS** adapter remains (pure Go, CAS-backed): it negotiates
+> `/info/lfs/objects/batch` and serves objects straight from the blob store.
 
 **OCI upload staging follows the blob backend**: with `--blob-backend=s3` the
 in-progress OCI chunked-upload bytes are staged in the same S3 bucket (under

@@ -11,7 +11,6 @@ require (
 	github.com/easydev-org/easyblobs/core v0.14.0
 	github.com/easydev-org/easyblobs/debian v0.0.0
 	github.com/easydev-org/easyblobs/generic v0.0.0
-	github.com/easydev-org/easyblobs/git v0.0.0
 	github.com/easydev-org/easyblobs/gitlfs v0.0.0
 	github.com/easydev-org/easyblobs/go v0.0.0
 	github.com/easydev-org/easyblobs/helm v0.0.0
@@ -89,7 +88,6 @@ replace (
 	github.com/easydev-org/easyblobs/core => ../core
 	github.com/easydev-org/easyblobs/debian => ../debian
 	github.com/easydev-org/easyblobs/generic => ../generic
-	github.com/easydev-org/easyblobs/git => ../git
 	github.com/easydev-org/easyblobs/gitlfs => ../gitlfs
 	github.com/easydev-org/easyblobs/go => ../go
 	github.com/easydev-org/easyblobs/helm => ../helm

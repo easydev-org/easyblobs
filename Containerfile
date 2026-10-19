@@ -65,7 +65,9 @@ RUN cd cmd && go build -mod=mod -trimpath -ldflags="-s -w" -o /out/easyblobs .
 FROM ${REGISTRY}/alpine:${ALPINE}
 ARG APK_MIRROR=http://artifact.worker.svc.cluster.local/artifacts/apk/alpine
 RUN printf '%s/v3.24/main\n%s/v3.24/community\n' "${APK_MIRROR}" "${APK_MIRROR}" > /etc/apk/repositories \
-    && env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy apk add --no-cache ca-certificates curl git
+    && env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy apk add --no-cache ca-certificates curl
+# No `git` binary: the git PROXY (bare local mirrors) was removed; the LFS
+# adapter is pure Go (CAS-backed), so nothing shells out to git.
 # /data holds the sqlite metadata + CAS blobs (mount a PVC/hostPath there).
 COPY --from=build /out/easyblobs /usr/local/bin/easyblobs
 ENV EASYVCS_HOME=/data
