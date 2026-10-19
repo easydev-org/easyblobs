@@ -3,10 +3,17 @@
 # Built WITH the cluster buildkitd: run ./build-image.sh (targets the shared
 # buildkitd, then pushes to forgejo via skopeo). No local build daemon.
 #
-# Deliberately NO `# syntax=docker/dockerfile:1` line: that directive makes
-# buildkit pull an external frontend image from Docker Hub, which is
-# unreachable in-cluster. This file only uses classic instructions (FROM / ARG /
-# ENV / RUN / COPY --from), so buildkitd's BUILT-IN frontend suffices.
+# The `# syntax` line below IS required: `RUN --mount=type=cache` is a
+# dockerfile-frontend instruction that the built-in classic frontend does not
+# understand. buildkitd resolves docker/dockerfile from docker.io, which its
+# config mirrors through the in-cluster artifact registry, so no external
+# network is needed (verified in-cluster).
+#
+# The cache mounts below matter even when buildkitd keeps a long-lived PVC:
+# they keep the go module cache and the npm store OUT of the layer graph, so
+# changing one source file does not invalidate a layer that holds hundreds of
+# megabytes of dependencies.
+# syntax=docker/dockerfile:1
 #
 # Build context: the artifact repo root (go.work + every protocol module +
 # cmd/). All sibling modules resolve through the replace directives in
@@ -28,7 +35,10 @@ ARG EASYBLOBS_WEBUI_REF=main
 ENV HTTP_PROXY=${HTTP_PROXY} \
     HTTPS_PROXY=${HTTPS_PROXY} \
     NO_PROXY=localhost,127.0.0.1,.svc.cluster.local,.svc,.nip.io,10.199.64.20,.develop.10.199.64.20.nip.io
-RUN apk add --no-cache git ca-certificates \
+# npm's cache is a cache MOUNT, not a layer: a re-cloned repo would otherwise
+# re-download every dependency from the network on each build.
+RUN --mount=type=cache,target=/root/.npm \
+    apk add --no-cache git ca-certificates \
     && git clone --depth 1 --branch "${EASYBLOBS_WEBUI_REF}" "${EASYBLOBS_WEBUI_REPO}" /webui \
     && cd /webui && npm ci --no-audit --no-fund && OUT_DIR=dist npm run build
 
@@ -59,7 +69,15 @@ COPY --from=webui /webui/dist/ system/ui/dist/
 # cmd/ is the server module: with GOWORK=off its replace directives resolve
 # every sibling protocol module from the copied tree; third-party deps come
 # from GOPROXY over the build proxy.
-RUN cd cmd && go build -mod=mod -trimpath -ldflags="-s -w" -o /out/easyblobs .
+#
+# The go module cache is a cache MOUNT so that editing one .go file does not
+# re-download the whole dependency tree (with GOWORK=off every sibling module
+# is resolved and compiled from the copied tree). The build cache
+# (GOCACHE) is mounted too: it is what makes an unchanged package skip
+# recompilation entirely instead of being recompiled from source every build.
+RUN --mount=type=cache,target=/root/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    cd cmd && go build -mod=mod -trimpath -ldflags="-s -w" -o /out/easyblobs .
 
 # ---- runtime ----
 FROM ${REGISTRY}/alpine:${ALPINE}
