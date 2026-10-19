@@ -156,8 +156,16 @@ func (s *State) tarballFromPackument(ctx context.Context, remote *easyblobkit.Re
 			pub = t
 		}
 	}
-	data, err := s.Registry.FetchAbsoluteBytes(ctx, v.Dist.Tarball)
-	return data, pub, err
+	fetched, err := s.Registry.FetchAbsolute(ctx, v.Dist.Tarball)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	// The packument's per-version `time` wins; the tarball's Last-Modified is
+	// the fallback.
+	if pub.IsZero() {
+		pub = fetched.PublishedAt
+	}
+	return fetched.Data, pub, nil
 }
 
 // errNoTarballType is a sentinel error for the packument fallback.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/easydev-org/easyblobs/targets"
 )
@@ -476,6 +477,10 @@ type Fetched struct {
 	// Digest is the CAS digest of the fetched bytes ("" on a legacy path that
 	// did not store them).
 	Digest string
+	// PublishedAt is the upstream's Last-Modified parsed from the response,
+	// when present (the best generic "package updated" signal for an absolute
+	// fetch). Zero when absent.
+	PublishedAt time.Time
 }
 
 // Stored is the summary of bytes written into the CAS.

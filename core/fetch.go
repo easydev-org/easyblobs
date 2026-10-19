@@ -70,7 +70,14 @@ func (r *Registry) fetchWithDirect(ctx context.Context, remote *Remote, path str
 	if err != nil {
 		return Fetched{}, err
 	}
-	return r.finishFetch(ctx, data)
+	f, err := r.finishFetch(ctx, data)
+	if err != nil {
+		return Fetched{}, err
+	}
+	if t, perr := http.ParseTime(resp.Header.Get("Last-Modified")); perr == nil {
+		f.PublishedAt = t
+	}
+	return f, nil
 }
 
 // UpstreamRedirectError reports a 3xx from an upstream.
@@ -100,7 +107,14 @@ func (r *Registry) FetchAbsolute(ctx context.Context, url string) (Fetched, erro
 	if err != nil {
 		return Fetched{}, err
 	}
-	return r.finishFetch(ctx, data)
+	f, err := r.finishFetch(ctx, data)
+	if err != nil {
+		return Fetched{}, err
+	}
+	if t, perr := http.ParseTime(resp.Header.Get("Last-Modified")); perr == nil {
+		f.PublishedAt = t
+	}
+	return f, nil
 }
 
 // FetchAbsoluteBytes pulls a full URL verbatim and returns its bytes.

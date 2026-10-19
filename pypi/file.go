@@ -48,7 +48,7 @@ func (s *State) simpleFile(w http.ResponseWriter, r *http.Request, project, file
 		return
 	}
 	version := versionFromFilename(filename, project)
-	s.storeVersion(project, version, filename, fetched.Data, "pull", r.Context())
+	s.storeVersionAt(project, version, filename, fetched.Data, "pull", fetched.PublishedAt, r.Context())
 	easyblobkit.ServeData(w, r, s.Registry, r.Context(), fetched.Data, "application/octet-stream", filename)
 }
 

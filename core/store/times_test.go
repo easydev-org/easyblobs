@@ -38,7 +38,8 @@ func TestStoredPublishedRoundTrip(t *testing.T) {
 		t.Errorf("PublishedAt = %v, want %v", got.PublishedAt, published)
 	}
 
-	// A zero time round-trips as the zero time (stored as 0).
+	// A row written with zero times gets a StoredAt backstop (now) and a
+	// PublishedAt falling back to StoredAt — never a negative epoch.
 	if err := s.Put(ctx, easyblobkit.Artifact{
 		Format: "npm", Repository: "x", Version: "0", Digest: "d2",
 	}); err != nil {
@@ -48,7 +49,42 @@ func TestStoredPublishedRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got2.StoredAt.IsZero() || !got2.PublishedAt.IsZero() {
-		t.Errorf("zero times should stay zero: %+v", got2)
+	if got2.StoredAt.IsZero() {
+		t.Errorf("StoredAt backstop missing: %+v", got2)
+	}
+	if !got2.PublishedAt.Equal(got2.StoredAt) {
+		t.Errorf("PublishedAt should fall back to StoredAt: %+v", got2)
+	}
+}
+
+// TestStoredAtKeptOnRewrite checks a re-write (same format/repo/version) keeps
+// the ORIGINAL StoredAt (first seen), not the rewrite time.
+func TestStoredAtKeptOnRewrite(t *testing.T) {
+	s, err := OpenSQLite(t.TempDir() + "/m.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	ctx := context.Background()
+
+	first := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := s.Put(ctx, easyblobkit.Artifact{
+		Format: "maven", Repository: "a", Version: "1", Digest: "d", StoredAt: first,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A second Put (e.g. an extra file on the same version) with no StoredAt
+	// must keep the original.
+	if err := s.Put(ctx, easyblobkit.Artifact{
+		Format: "maven", Repository: "a", Version: "1", Digest: "d2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(ctx, "maven", "a", "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.StoredAt.Equal(first) {
+		t.Errorf("StoredAt reset on rewrite: got %v want %v", got.StoredAt, first)
 	}
 }

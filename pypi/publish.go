@@ -65,16 +65,24 @@ func (s *State) projectAPI(w http.ResponseWriter, r *http.Request, path string) 
 }
 
 func (s *State) storeVersion(name, version, filename string, data []byte, source string, ctx context.Context) {
+	s.storeVersionAt(name, version, filename, data, source, time.Time{}, ctx)
+}
+
+// storeVersionAt is storeVersion with an explicit publish time (the upstream
+// Last-Modified on a pull-through); zero falls back to now.
+func (s *State) storeVersionAt(name, version, filename string, data []byte, source string, publishedAt time.Time, ctx context.Context) {
 	name = NormalizeName(name)
 	if version == "" {
 		version = "0.1.0"
 	}
-	now := time.Now().UTC()
-	prop, _ := json.Marshal(map[string]string{"upload_time": now.Format("2006-01-02T15:04:05.000000Z")})
+	if publishedAt.IsZero() {
+		publishedAt = time.Now().UTC()
+	}
+	prop, _ := json.Marshal(map[string]string{"upload_time": publishedAt.Format("2006-01-02T15:04:05.000000Z")})
 	s.Registry.StoreVersion(ctx, easyblobkit.VersionInput{
 		Format: "pypi", Repository: name, Version: version,
 		Filename: filename, Source: source, Data: data,
-		Proprietary: prop, PublishedAt: now,
+		Proprietary: prop, PublishedAt: publishedAt,
 	})
 }
 

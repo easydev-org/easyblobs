@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -86,6 +87,30 @@ func (s *Store) Close() error {
 func (s *Store) Put(ctx context.Context, a easyblobkit.Artifact) error {
 	if a.Repository == "" {
 		return errors.New("artifact: empty repository")
+	}
+	// Backstop: every row gets a StoredAt (the moment it FIRST entered the
+	// store), so callers that write via Meta.Put directly (maven, ...) still
+	// record it. If the row already exists, keep its original StoredAt so a
+	// re-write (a 304 revalidation, an extra file on the same version) does not
+	// reset "first seen".
+	if a.StoredAt.IsZero() {
+		var prev artifactRow
+		if err := s.db.Where("format=? AND repository=? AND version=?",
+			a.Format, a.Repository, a.Version).First(&prev).Error; err == nil && prev.StoredAt > 0 {
+			a.StoredAt = time.Unix(prev.StoredAt, 0)
+		} else {
+			a.StoredAt = time.Now()
+		}
+	}
+	// PublishedAt backstop: prefer the Last-Modified already on the row, else
+	// fall back to StoredAt. Only fills a zero, so a protocol-extracted time
+	// (npm `time`, OCI `created`, ...) is never overwritten.
+	if a.PublishedAt.IsZero() {
+		if t, err := http.ParseTime(a.LastModified); err == nil {
+			a.PublishedAt = t
+		} else {
+			a.PublishedAt = a.StoredAt
+		}
 	}
 	blobs, err := json.Marshal(a.Blobs)
 	if err != nil {
@@ -205,7 +230,9 @@ func (s *Store) ListRepositories(ctx context.Context) ([]string, error) {
 // ListPackages implements IndexStore.
 func (s *Store) ListPackages(ctx context.Context) ([]easyblobkit.PackageSummary, error) {
 	var rows []artifactRow
-	if err := s.db.Order("format, repository, version").Find(&rows).Error; err != nil {
+	// Newest first by publish time (the "package updated" time), then by
+	// store time, then a stable key. Rows with an unknown time (0) sort last.
+	if err := s.db.Order("published_at DESC, stored_at DESC, format, repository, version").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make([]easyblobkit.PackageSummary, 0, len(rows))
