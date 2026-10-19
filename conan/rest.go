@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/easydev-org/easyblobs/core"
 )
@@ -55,7 +56,7 @@ func (s *State) conans(w http.ResponseWriter, r *http.Request, path string) {
 				// Package revision lookup: return the recorded package revision
 				// if we have package files for this pid, else proxy.
 				if prev, ok := s.packageRev(r.Context(), name, ver, parts); ok {
-					easyblobkit.JSON(w, http.StatusOK, map[string]any{"revision": prev, "time": "2024-01-01T00:00:00Z"})
+					easyblobkit.JSON(w, http.StatusOK, map[string]any{"revision": prev, "time": s.revTime(r, name, ver)})
 					return
 				}
 				s.replyOrProxy(w, r, nil, "/v2/conans/"+rest)
@@ -202,7 +203,7 @@ func (s *State) conans(w http.ResponseWriter, r *http.Request, path string) {
 				rev := s.loadRecipeRev(r.Context(), name, ver)
 				easyblobkit.JSON(w, http.StatusOK, map[string]any{
 					"reference": name + "/" + ver + "@_/_",
-					"revisions": []any{map[string]any{"revision": rev, "time": "2024-01-01T00:00:00Z"}},
+					"revisions": []any{map[string]any{"revision": rev, "time": s.revTime(r, name, ver)}},
 				})
 				return
 			}
@@ -243,12 +244,12 @@ func (s *State) conans(w http.ResponseWriter, r *http.Request, path string) {
 		}
 		if _, err := s.Registry.Meta.Get(r.Context(), "conan", name, ver); err != nil {
 			rev := s.loadRecipeRev(r.Context(), name, ver)
-			fallback := map[string]any{"revision": rev, "time": "2024-01-01T00:00:00Z"}
+			fallback := map[string]any{"revision": rev, "time": s.revTime(r, name, ver)}
 			s.replyOrProxy(w, r, fallback, "/v2/conans/"+easyblobkit.URLencode(name)+"/"+easyblobkit.URLencode(ver)+"/_/_/latest")
 			return
 		}
 		rev := s.loadRecipeRev(r.Context(), name, ver)
-		easyblobkit.JSON(w, http.StatusOK, map[string]any{"revision": rev, "time": "2024-01-01T00:00:00Z"})
+		easyblobkit.JSON(w, http.StatusOK, map[string]any{"revision": rev, "time": s.revTime(r, name, ver)})
 	case strings.HasPrefix(sub, "revisions"):
 		if _, err := s.Registry.Meta.Get(r.Context(), "conan", name, ver); err != nil {
 			// Recipe not yet uploaded: return 404 so the Conan client treats
@@ -259,7 +260,7 @@ func (s *State) conans(w http.ResponseWriter, r *http.Request, path string) {
 		}
 		rev := s.loadRecipeRev(r.Context(), name, ver)
 		easyblobkit.JSON(w, http.StatusOK, map[string]any{
-			"revisions": []any{map[string]any{"revision": rev, "time": "2024-01-01T00:00:00Z"}},
+			"revisions": []any{map[string]any{"revision": rev, "time": s.revTime(r, name, ver)}},
 		})
 	case strings.HasPrefix(sub, "revisions/") && strings.HasSuffix(sub, "/files"):
 		s.files(w, r, "revisions/"+strings.TrimSuffix(sub, "/files"))
@@ -318,6 +319,16 @@ func (s *State) downloadURLs(w http.ResponseWriter, r *http.Request, name, ver, 
 		}
 	}
 	easyblobkit.JSON(w, http.StatusOK, map[string]any{"download_urls": urls})
+}
+
+// revTime returns the RFC3339 time to advertise for a Conan revision: the
+// version's publish (or cache) time, falling back to now so the client never
+// sees a bogus fixed date.
+func (s *State) revTime(r *http.Request, name, ver string) string {
+	if t, ok := s.Registry.ArtifactTime(r.Context(), "conan", name, ver); ok {
+		return t
+	}
+	return easyblobkit.PublishTime(easyblobkit.Artifact{}, time.Time{})
 }
 
 func (s *State) files(w http.ResponseWriter, r *http.Request, rest string) {

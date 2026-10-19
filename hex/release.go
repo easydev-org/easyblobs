@@ -26,7 +26,8 @@ func (s *State) releaseInfo(w http.ResponseWriter, r *http.Request, trimmed stri
 			w.WriteHeader(http.StatusCreated)
 			return
 		}
-		easyblobkit.JSON(w, http.StatusOK, map[string]any{"name": name, "version": version, "inserted_at": "2024-01-01T00:00:00Z"})
+		t, _ := s.Registry.ArtifactTime(r.Context(), "hex", name, version)
+		easyblobkit.JSON(w, http.StatusOK, map[string]any{"name": name, "version": version, "inserted_at": t})
 		return
 	}
 	w.WriteHeader(http.StatusNotFound)

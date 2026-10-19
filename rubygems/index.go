@@ -50,7 +50,8 @@ func (s *State) versionsAPI(w http.ResponseWriter, r *http.Request, name string)
 	}
 	var out []any
 	for _, v := range versions {
-		out = append(out, map[string]any{"number": v, "platform": "ruby", "created_at": "2024-01-01T00:00:00Z"})
+		t, _ := s.Registry.ArtifactTime(r.Context(), "rubygems", name, v)
+		out = append(out, map[string]any{"number": v, "platform": "ruby", "created_at": t})
 	}
 	easyblobkit.JSON(w, http.StatusOK, out)
 }
@@ -130,7 +131,8 @@ func (s *State) versionV2(w http.ResponseWriter, r *http.Request, path string) {
 	if len(parts) >= 3 {
 		name := strings.TrimSuffix(parts[0], ".json")
 		ver := strings.TrimSuffix(parts[2], ".json")
-		easyblobkit.JSON(w, http.StatusOK, map[string]any{"name": name, "version": ver, "platform": "ruby", "number": ver, "created_at": "2024-01-01T00:00:00Z"})
+		t, _ := s.Registry.ArtifactTime(r.Context(), "rubygems", name, ver)
+		easyblobkit.JSON(w, http.StatusOK, map[string]any{"name": name, "version": ver, "platform": "ruby", "number": ver, "created_at": t})
 		return
 	}
 	w.WriteHeader(http.StatusNotFound)

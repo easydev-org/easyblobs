@@ -85,7 +85,7 @@ func (s *State) indexYaml(w http.ResponseWriter, r *http.Request) bool {
 			}
 			out.WriteString("    - apiVersion: v2\n      name: " + name + "\n      version: " + v +
 				"\n      urls:\n        - " + s.base() + "/charts/" + fname +
-				"\n      created: 2024-01-01T00:00:00Z\n      digest: " + digest + "\n")
+				"\n      created: " + easyblobkit.PublishTime(art, time.Time{}) + "\n      digest: " + digest + "\n")
 		}
 	}
 	// Merge upstream index so public charts pull through.

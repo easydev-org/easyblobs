@@ -227,11 +227,12 @@ func registrationLeaf(base, lid, id, v string) map[string]any {
 func (s *State) registrationVersion(w http.ResponseWriter, r *http.Request, id, ver string) {
 	lid := lower(id)
 	base := s.base()
+	published, _ := s.Registry.ArtifactTime(r.Context(), "nuget", id, ver)
 	entry := map[string]any{
 		"@id": base + "/v3/registration/" + lid + "/" + ver + ".json",
-		"id":  id, "version": ver, "listed": true, "published": "2024-01-01T00:00:00Z",
+		"id":  id, "version": ver, "listed": true, "published": published,
 		"packageContent": base + "/v3/flatcontainer/" + lid + "/" + ver + "/" + lid + "." + ver + ".nupkg",
-		"catalogEntry":   map[string]any{"@id": base + "/v3/registration/" + lid + "/" + ver + ".json", "id": id, "version": ver, "listed": true, "published": "2024-01-01T00:00:00Z"},
+		"catalogEntry":   map[string]any{"@id": base + "/v3/registration/" + lid + "/" + ver + ".json", "id": id, "version": ver, "listed": true, "published": published},
 	}
 	easyblobkit.JSON(w, http.StatusOK, entry)
 }

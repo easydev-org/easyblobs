@@ -119,6 +119,15 @@ func (s *State) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// versionTime returns the RFC3339 publish time for a locally-known version
+// (empty when unknown), so a locally-served .info carries a real timestamp.
+func (s *State) versionTime(r *http.Request, module, version string) string {
+	if t, ok := s.Registry.ArtifactTime(r.Context(), "go", module, version); ok {
+		return t
+	}
+	return ""
+}
+
 func splitModuleVersion(rest string) (string, string) {
 	if i := strings.Index(rest, "/@v/"); i >= 0 {
 		return rest[:i], rest[i+len("/@v/"):]
@@ -129,11 +138,12 @@ func splitModuleVersion(rest string) (string, string) {
 func (s *State) latest(w http.ResponseWriter, r *http.Request, module string) {
 	versions, _ := s.Registry.Meta.ListVersions(r.Context(), "go", module)
 	if v := easyblobkit.HighestVersion(versions); v != "" {
-		s.jsonOk(w, map[string]any{"Version": v, "Time": "2024-01-01T00:00:00Z"})
+		s.jsonOk(w, map[string]any{"Version": v, "Time": s.versionTime(r, module, v)})
 		return
 	}
 	if len(versions) > 0 {
-		s.jsonOk(w, map[string]any{"Version": versions[len(versions)-1], "Time": "2024-01-01T00:00:00Z"})
+		v := versions[len(versions)-1]
+		s.jsonOk(w, map[string]any{"Version": v, "Time": s.versionTime(r, module, v)})
 		return
 	}
 	s.proxyOne(w, r, module, "@latest", "application/json")
@@ -151,7 +161,7 @@ func (s *State) versions(w http.ResponseWriter, r *http.Request, module string) 
 
 func (s *State) info(w http.ResponseWriter, r *http.Request, module, version string) {
 	if _, err := s.Registry.Meta.Get(r.Context(), "go", module, version); err == nil {
-		s.jsonOk(w, map[string]any{"Version": version, "Time": "2024-01-01T00:00:00Z"})
+		s.jsonOk(w, map[string]any{"Version": version, "Time": s.versionTime(r, module, version)})
 		return
 	}
 	s.proxyOne(w, r, module, "@v/"+version+".info", "application/json")

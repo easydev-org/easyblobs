@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/easydev-org/easyblobs/core"
 )
@@ -75,7 +76,7 @@ func mergeJSONHrefs(body, selfBase, project string, versions []string, req *http
 					"url":         selfBase + "/simple/" + easyblobkit.URLencode(project) + "/" + easyblobkit.URLencode(b.Name),
 					"hashes":      map[string]any{"sha256": b.Hex()},
 					"size":        b.Size,
-					"upload-time": "2024-01-01T00:00:00Z",
+					"upload-time": easyblobkit.PublishTime(art, time.Time{}),
 				}
 				files = append(files, entry)
 				seen[b.Name] = true

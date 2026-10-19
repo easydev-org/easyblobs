@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/easydev-org/easyblobs/core"
 )
@@ -100,7 +101,7 @@ func (s *State) simpleProjectJSON(w http.ResponseWriter, r *http.Request, name s
 			if b.Size > 0 {
 				entry["size"] = b.Size
 			}
-			entry["upload-time"] = "2024-01-01T00:00:00Z"
+			entry["upload-time"] = easyblobkit.PublishTime(art, time.Time{})
 			files = append(files, entry)
 		}
 	}

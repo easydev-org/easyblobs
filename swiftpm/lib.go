@@ -282,15 +282,18 @@ func (s *State) releases(w http.ResponseWriter, r *http.Request, scope, name, id
 }
 
 func (s *State) versionMeta(w http.ResponseWriter, r *http.Request, id, version string) {
-	checksum := ""
-	if art, err := s.Registry.Meta.Get(r.Context(), "swift", id, version); err == nil && len(art.Blobs) > 0 {
-		checksum = art.Blobs[0].Hex()
+	checksum, publishedAt := "", ""
+	if art, err := s.Registry.Meta.Get(r.Context(), "swift", id, version); err == nil {
+		if len(art.Blobs) > 0 {
+			checksum = art.Blobs[0].Hex()
+		}
+		publishedAt = easyblobkit.PublishTime(art, time.Time{})
 	}
 	w.Header().Set("Content-Version", "1")
 	easyblobkit.JSON(w, http.StatusOK, map[string]any{
 		"id": id, "version": version,
 		"resources": []any{map[string]any{"name": "source-archive", "type": "application/zip", "checksum": checksum}},
-		"metadata":  map[string]any{"description": ""}, "publishedAt": "2024-01-01T00:00:00Z",
+		"metadata":  map[string]any{"description": ""}, "publishedAt": publishedAt,
 	})
 }
 
