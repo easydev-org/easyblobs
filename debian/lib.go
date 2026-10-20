@@ -100,6 +100,14 @@ func (s *State) proxy(w http.ResponseWriter, r *http.Request, archive, rest stri
 	if b := s.Registry.Upstreams.Repo("debian", archive); b != "" && base == "" {
 		base = b
 	}
+	ct := mediaTypeOf(rest)
+	// Acquire-By-Hash: serve a by-hash index from the CAS when we already have
+	// the bytes (apt fetched the index by name moments before), so an apt update
+	// works even when the upstream mirror does not publish by-hash paths. A miss
+	// falls through to the upstream proxy below.
+	if s.serveByHash(w, r, archive, rest, ct) {
+		return
+	}
 	if base == "" {
 		easyblobkit.Error(w, http.StatusNotFound, "unknown archive: "+archive)
 		return
@@ -107,7 +115,6 @@ func (s *State) proxy(w http.ResponseWriter, r *http.Request, archive, rest stri
 	// The client's source keeps the archive prefix in the URL
 	// (deb.debian.org/debian/dists/...), so fetch and cache the full path.
 	repo := archive + "/" + suiteOf(rest)
-	ct := mediaTypeOf(rest)
 	res := s.Registry.FetchCachedPath(r.Context(), "debian", repo, path, "/"+path, base,
 		easyblobkit.PathCachePolicy{MediaType: ct, BlobName: path})
 	if !res.OK {

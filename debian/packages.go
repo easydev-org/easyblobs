@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -57,11 +59,28 @@ func GeneratePackages(store easyblobkit.HostedStore) easyblobkit.Generator {
 		if err != nil {
 			return nil, err
 		}
-		return map[string]easyblobkit.GeneratedFile{
+		out := map[string]easyblobkit.GeneratedFile{
 			"Packages":    {Body: body, ContentType: "text/plain"},
 			"Packages.gz": {Body: gz, ContentType: "application/gzip"},
-		}, nil
+		}
+		// Acquire-By-Hash: publish the index under
+		// by-hash/SHA256/<hex> too, so an apt source that opts in (a Release with
+		// "Acquire-By-Hash: yes") can fetch by hash. The hex is the sha256 of the
+		// bytes, which is exactly the CAS digest we would serve anyway.
+		addByHash(out, "Packages", body)
+		addByHash(out, "Packages.gz", gz)
+		return out, nil
 	}
+}
+
+// addByHash adds a "by-hash/SHA256/<hex>" alias for one generated file, so the
+// bytes are reachable by content hash (relative to the directory the index
+// lives in — the HostedHandler serves repo-relative paths, and a client under a
+// binary-<arch> dir resolves by-hash/ next to it).
+func addByHash(out map[string]easyblobkit.GeneratedFile, name string, body []byte) {
+	sum := sha256.Sum256(body)
+	alias := "by-hash/SHA256/" + hex.EncodeToString(sum[:])
+	out[alias] = easyblobkit.GeneratedFile{Body: body, ContentType: out[name].ContentType}
 }
 
 // gzipBytes gzips a document (apt prefers Packages.gz over Packages).
