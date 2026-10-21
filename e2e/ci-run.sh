@@ -65,7 +65,14 @@ cas_count() {
   find "$EASYBLOBS_DATA" -type f 2>/dev/null | grep -vc '\.db' || true
 }
 
+# Some adapters cache the ARTIFACT in the metadata DB (a small file kept in a
+# table) rather than as a CAS blob, so the CAS file count does not move even
+# though the pull succeeded. Measure the whole data dir as well, so those
+# protocols are not failed on a technicality while still being checked.
+data_bytes() { du -sb "$EASYBLOBS_DATA" 2>/dev/null | awk '{print $1}' || echo 0; }
+
 before=$(cas_count)
+before_bytes=$(data_bytes)
 
 echo "=== e2e/$PROTO (base=$EASYBLOBS_BASE, CAS before: $before files) ==="
 if ! sh "e2e/scripts/$PROTO.sh"; then
@@ -76,27 +83,22 @@ if ! sh "e2e/scripts/$PROTO.sh"; then
 fi
 
 after=$(cas_count)
+after_bytes=$(data_bytes)
 
-# The cache assertion: a pull-through MUST leave bytes behind, else an adapter
-# that only proxies would pass. A couple of protocols keep their cache in the
-# METADATA db and never grow the CAS file count, so they assert "did not lose
-# data" instead of a strict increase.
+# The cache assertion: a pull-through MUST leave something behind, otherwise an
+# adapter that only proxies would pass. Either the CAS grew (a blob was
+# written) OR the data dir grew (the artifact went into the metadata DB).
+# Requiring ONLY the CAS count was wrong: pypi/rubygems/conan store the
+# package inside pkglab.db, so they legitimately never add a CAS file.
 #
-# NOTE: the verdict is printed only AFTER the assertion, so a failing protocol
-# can never also print "OK" (which it used to, and made the logs lie).
-case "$PROTO" in
-  huggingface|netcache)
-    [ "$after" -ge "$before" ] || {
-      echo "FAIL: e2e/$PROTO lost data (CAS $before -> $after)" >&2
-      exit 1
-    }
-    ;;
-  *)
-    [ "$after" -gt "$before" ] || {
-      echo "FAIL: e2e/$PROTO did not cache anything (CAS stayed at $before)" >&2
-      exit 1
-    }
-    ;;
-esac
+# The verdict is printed only AFTER the assertion, so a failing protocol can
+# never also print "OK" (it used to, and made the logs contradict themselves).
+cached=0
+[ "$after" -gt "$before" ] && cached=1
+[ "$after_bytes" -gt "$before_bytes" ] && cached=1
+if [ "$cached" -ne 1 ]; then
+  echo "FAIL: e2e/$PROTO cached nothing (CAS $before->$after files, data $before_bytes->$after_bytes bytes)" >&2
+  exit 1
+fi
 
-echo "=== e2e/$PROTO OK (CAS: $before -> $after files) ==="
+echo "=== e2e/$PROTO OK (CAS: $before -> $after files; data: $before_bytes -> $after_bytes bytes) ==="
