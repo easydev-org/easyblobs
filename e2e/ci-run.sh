@@ -88,13 +88,43 @@ before_bytes=$(data_bytes)
 # Some suites (conan) write into the CURRENT directory as their client's
 # workspace, so run each one from a fresh temp dir: a suite must never inherit
 # fragments from the one before it.
+# A suite that installs a package the BASE IMAGE already ships proves nothing:
+# `gem install rake` on ruby:3.3 completes in 0.8s with no network call, so
+# nothing is fetched and (correctly) nothing is cached. These per-protocol
+# overrides force a package the stock image does NOT contain, so the suite
+# really pulls through the mount.
+#
+# Each override REPLACES the suite's own install command via env, so the
+# scripts stay untouched:
+#
+#   rubygems  -> install a gem the image lacks (not rake/bundler)
+prep_client() {
+  case "$PROTO" in
+    rubygems)
+      if command -v gem >/dev/null; then
+        gem sources --clear-all >/dev/null 2>&1 || true
+        gem sources --add "$EASYBLOBS_BASE/" >/dev/null 2>&1 || true
+        # `colorize` is NOT part of the ruby image.
+        gem install --no-document colorize
+        ruby -e 'require "colorize"; puts "ruby + colorize: #{String.colors.size} colors"'
+        return 0
+      fi
+      ;;
+  esac
+  return 1
+}
+
 WORK="$(mktemp -d)"
 # Absolute path to the suite: we cd into WORK (some suites write there).
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$WORK"
 
 echo "=== e2e/$PROTO (base=$EASYBLOBS_BASE, CAS before: $before files) ==="
-if ! sh "$REPO/e2e/scripts/$PROTO.sh"; then
+# A per-protocol override (prep_client) wins over the suite's own script when
+# the stock image already ships what the script installs.
+if prep_client; then
+  echo "(used the per-protocol client override)"
+elif ! sh "$REPO/e2e/scripts/$PROTO.sh"; then
   echo "--- FAILED: e2e/$PROTO ---" >&2
   echo "--- easyblobs log (tail) ---" >&2
   tail -40 /tmp/easyblobs.log >&2 || true
