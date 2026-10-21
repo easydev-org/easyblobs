@@ -1,0 +1,8 @@
+# Placeholder so `//go:embed all:ui/dist` always matches, even in a source
+# checkout where the SPA has not been built. The real files (produced by the
+# Containerfile's node stage: `npm run build`) are NOT committed; when present
+# they are embedded instead of this placeholder.
+#
+# Without this file `go build ./...` and `go test ./...` fail with
+#   "pattern all:ui/dist: no matching files found"
+# before the Docker build ever runs.
