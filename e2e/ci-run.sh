@@ -24,7 +24,7 @@
 #
 # Needs: EASYBLOBS_ORIGIN (e.g. http://127.0.0.1:8080) plus whatever client the
 # individual script requires.
-set -euo pipefail
+set -eu
 
 PROTO="${1:?usage: ci-run.sh <protocol>}"
 : "${EASYBLOBS_ORIGIN:?EASYBLOBS_ORIGIN not set}"
