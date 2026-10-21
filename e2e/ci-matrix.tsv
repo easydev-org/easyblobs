@@ -1,0 +1,59 @@
+# ci-matrix.tsv — every REAL e2e suite, and the driver that can run it.
+#
+# Columns: protocol <TAB> driver <TAB> why
+#
+# One CI job per driver: pull the image once, run every protocol assigned to it.
+# e2e/genmatrix.py turns this file into the workflow matrix, so adding a
+# protocol is a one-line change HERE and nothing else.
+#
+# The driver is chosen from what the script ACTUALLY invokes (verified by
+# reading each e2e/scripts/<p>.sh), not from the protocol's name.
+#
+# `host` = the ubuntu-latest runner itself (git, go, python3, curl, wget, tar,
+# and the setup-* steps the workflow installs).
+
+# --- the runner itself ---
+git	host	script runs `git clone`
+gitlfs	host	`git clone` + `git lfs` (installed via apt in the job)
+go	host	script runs `go get` with GOPROXY pointed at the mount
+protobuf	host	script runs `buf build` (installed via setup-buf)
+swift	host	script drives the REST API with python3 urllib
+netcache	host	script uses curl (Range + repeat-fetch identity)
+oci	host	script uses wget + tar (manifest/index/blob walk, no docker)
+
+# --- images that carry the client ---
+npm	node:22	script runs `npm install`
+jsrnpm	node:22	script uses wget against an npm-style packument
+jsr	node:22	script uses wget against the JSR REST API
+pypi	python:3.12	script runs `pip install`
+huggingface	python:3.12	script runs `pip install` + huggingface_hub
+conan	python:3.12	script runs `conan` (installed via pip in the job)
+helm	alpine/helm:3.16	script runs `helm repo add` / `pull` / `template`
+cargo	rust:1	script runs `cargo` with a crates-io source replacement
+rubygems	ruby:3.3	script runs `gem install`
+composer	composer:2	script runs `composer require` + php
+maven	maven:3.9-eclipse-temurin-21	script runs `mvn`
+gradle	gradle:8-jdk21	script uses wget for a kotlin-stdlib pom
+google	gradle:8-jdk21	wget: AGP pom + androidx aar
+clojars	gradle:8-jdk21	wget: ring-core pom + jar
+spring	gradle:8-jdk21	wget: spring-core milestone pom
+jitpack	gradle:8-jdk21	wget: jitpack pom
+ivy	gradle:8-jdk21	wget: ivy descriptor + jar (cache identity check)
+bazel	gradle:8-jdk21	wget: BCR metadata.json + source.json
+hackage	gradle:8-jdk21	wget: 01-index.tar.gz + a package tarball
+stackage	gradle:8-jdk21	wget: lts cabal.config
+cpan	gradle:8-jdk21	wget: 02packages index + DBI tarball
+opam	gradle:8-jdk21	wget: opam index tarball + dune opam file
+pecl	gradle:8-jdk21	wget: PECL tarball
+jenkins	gradle:8-jdk21	wget: update-center.json + plugin hpi
+conda	continuumio/miniconda3	script runs `conda create` / `conda run`
+nuget	mcr.microsoft.com/dotnet/sdk:9.0	script runs `dotnet` (v3/index.json source)
+hex	elixir:1.17	script runs `mix` + hex archive
+pub	dart:stable	script runs `dart pub`
+juliapkg	julia:1	script runs `julia` Pkg with JULIA_PKG_SERVER
+luarocks	ubuntu:24.04	script runs `luarocks` (installed via apt in the job)
+nix	nixos/nix	script runs `nix store info` / `nix-instantiate`
+debian	debian:bookworm	script runs `apt-get` from a [trusted=yes] source
+apk	alpine:3.20	script runs `apk add --allow-untrusted`
+rpm	fedora:41	script runs `dnf install`
+cran	r-base:4.4	script runs `Rscript install.packages`

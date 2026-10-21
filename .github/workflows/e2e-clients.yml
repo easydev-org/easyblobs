@@ -1,0 +1,192 @@
+name: e2e-clients
+
+# Run every REAL e2e suite (e2e/scripts/*.sh) against a locally started
+# easyblobs, on GitHub CI — NOT on a developer machine.
+#
+# One job per DRIVER (the container that carries the client tool), so a single
+# image is pulled once and all its protocols run in it. The driver/protocol
+# mapping lives in e2e/ci-matrix.tsv so adding a protocol is a one-line change
+# there, not in this file.
+#
+# The server runs on the RUNNER (so the image only needs the client), and the
+# job container reaches it through host networking.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "comma-separated protocols (empty = all)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  CGO_ENABLED: "0"
+  EASYBLOBS_PORT: "8080"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Build the server ONCE and share the binary: every protocol job then only
+  # starts it, which keeps the matrix cheap.
+  # ---------------------------------------------------------------------------
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+          cache: true
+      - name: build easyblobs
+        run: |
+          set -euo pipefail
+          go build -o easyblobs-bin ./cmd
+          ls -lh easyblobs-bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: easyblobs-bin
+          path: easyblobs-bin
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------
+  # Resolve the matrix (driver -> protocols) from the TSV, so the protocol list
+  # lives in ONE place.
+  # ---------------------------------------------------------------------------
+  matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      drivers: ${{ steps.gen.outputs.drivers }}
+      count: ${{ steps.gen.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: gen
+        name: build the driver matrix from e2e/ci-matrix.tsv
+        env:
+          ONLY: ${{ inputs.only }}
+        run: |
+          set -euo pipefail
+          # One single line of JSON in the output variable: a real matrix body.
+          out=$(python3 e2e/genmatrix.py)
+          echo "drivers=$out" >> "$GITHUB_OUTPUT"
+          # A compact human summary in the job log.
+          echo "$out" | python3 -c 'import json,sys;d=json.load(sys.stdin);[print(x["driver"],"->",x["protocols"]) for x in d["include"]]'
+
+  # ---------------------------------------------------------------------------
+  # The real clients.
+  # ---------------------------------------------------------------------------
+  clients:
+    needs: [server, matrix]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix.outputs.drivers) }}
+    # host networking so the container reaches the runner's 127.0.0.1:8080
+    container:
+      image: ${{ matrix.driver }}
+      options: --network host
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: easyblobs-bin
+          path: /tmp/bin
+
+      - name: toolchain sanity
+        run: |
+          set -euo pipefail
+          echo "driver: ${{ matrix.driver }}"
+          echo "protocols: ${{ matrix.protocols }}"
+          # The clients a script needs are the driver's whole point; failing
+          # loudly here beats a confusing protocol error later.
+          for t in curl wget tar; do
+            command -v "$t" >/dev/null || { echo "missing $t"; exit 1; }
+          done
+
+      # A few clients are NOT in their base image. Installing them here (rather
+      # than baking a custom image) keeps the matrix to stock images, and the
+      # guard makes the intent explicit: only install when the protocol runs.
+      - name: install the extra client for this driver
+        run: |
+          set -euo pipefail
+          P=" ${{ matrix.protocols }} "
+          has() { case "$P" in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+          if has conan; then
+            python3 -m pip install --quiet --disable-pip-version-check conan
+          fi
+          if has luarocks && command -v apt-get >/dev/null; then
+            apt-get update -qq && apt-get install -y -qq luarocks lua5.4 >/dev/null
+          fi
+          if has gitlfs && command -v apt-get >/dev/null; then
+            apt-get update -qq && apt-get install -y -qq git-lfs >/dev/null && git lfs install
+          fi
+          if has protobuf; then
+            # `buf build` is what the script asserts with.
+            if ! command -v buf >/dev/null; then
+              BUF_VER=1.47.2
+              curl -fsSL -o /tmp/buf \
+                "https://github.com/bufbuild/buf/releases/download/v${BUF_VER}/buf-Linux-x86_64"
+              install -m 0755 /tmp/buf /usr/local/bin/buf
+            fi
+          fi
+          echo "installed; tool checks:"
+          for t in conan luarocks buf git-lfs; do
+            command -v "$t" >/dev/null && echo "  $t: $(command -v "$t")" || true
+          done
+
+      # The go protocol script runs `go get`, so the GO toolchain has to be in
+      # the image. It is on the runner, not in most images, so add it here.
+      - name: install go for the go protocol
+        if: contains(matrix.protocols, 'go')
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+          cache: true
+
+      - name: start easyblobs
+        run: |
+          set -euo pipefail
+          chmod +x /tmp/bin/easyblobs-bin
+          mkdir -p /tmp/eb-data
+          /tmp/bin/easyblobs-bin --listen "0.0.0.0:${EASYBLOBS_PORT}" \
+            --data /tmp/eb-data --self-base "http://127.0.0.1:${EASYBLOBS_PORT}" \
+            >/tmp/easyblobs.log 2>&1 &
+          i=0
+          until curl -fsS "http://127.0.0.1:${EASYBLOBS_PORT}/healthz" >/dev/null 2>&1; do
+            i=$((i+1)); [ "$i" -gt 120 ] && { cat /tmp/easyblobs.log; exit 1; }
+            sleep 0.5
+          done
+          curl -fsS "http://127.0.0.1:${EASYBLOBS_PORT}/healthz"
+          {
+            echo "EASYBLOBS_BASE=http://127.0.0.1:${EASYBLOBS_PORT}/artifacts"
+            echo "EASYBLOBS_URL=http://127.0.0.1:${EASYBLOBS_PORT}"
+            echo "EASYBLOBS_DATA=/tmp/eb-data"
+          } >> "$GITHUB_ENV"
+
+      - name: run the real clients
+        run: |
+          set -uo pipefail
+          fail=""
+          for p in ${{ matrix.protocols }}; do
+            if ! sh e2e/ci-run.sh "$p"; then
+              fail="$fail $p"
+            fi
+          done
+          if [ -n "$fail" ]; then
+            echo "FAILED protocols:$fail" >&2
+            exit 1
+          fi
+          echo "all protocols in this driver passed"
+
+      - name: upload server log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: easyblobs-log-${{ strategy.job-index }}
+          path: /tmp/easyblobs.log
+          if-no-files-found: ignore
