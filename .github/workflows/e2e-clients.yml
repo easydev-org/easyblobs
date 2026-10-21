@@ -255,30 +255,6 @@ jobs:
           go-version-file: go.work
           cache: true
 
-      - name: start easyblobs
-        run: |
-          set -eu
-          chmod +x /tmp/bin/easyblobs-bin
-          mkdir -p /tmp/eb-data
-          # EASYBLOBS_DEBUG makes the server log every request
-          # ("req GET /artifacts/..."). ci-run.sh uses that count to tell
-          # "the client never reached the mount" apart from "the mount answered
-          # but stored nothing" - without the flag the count is always 0 and
-          # every protocol would look like a bypass.
-          EASYBLOBS_DEBUG=1 /tmp/bin/easyblobs-bin --listen "0.0.0.0:${EASYBLOBS_PORT}" \
-            --data /tmp/eb-data --self-base "http://127.0.0.1:${EASYBLOBS_PORT}" \
-            >/tmp/easyblobs.log 2>&1 &
-          i=0
-          until curl -fsS "http://127.0.0.1:${EASYBLOBS_PORT}/healthz" >/dev/null 2>&1; do
-            i=$((i+1)); [ "$i" -gt 120 ] && { cat /tmp/easyblobs.log; exit 1; }
-            sleep 0.5
-          done
-          curl -fsS "http://127.0.0.1:${EASYBLOBS_PORT}/healthz"
-
-      # The runner HAS outbound network, and package managers use it even when
-      # told to use a mirror - which is how rubygems/composer "passed" while
-      # easyblobs saw zero requests. Give the client a proxy that allows ONLY
-      # the mount, so a green result proves the bytes came through easyblobs.
       - name: start the allowlist proxy (mount only, no egress)
         run: |
           set -eu
@@ -336,6 +312,38 @@ jobs:
             echo "EASYBLOBS_ALLOWLIST_PROXY=http://127.0.0.1:8888"
           } >> "$GITHUB_ENV"
 
+      - name: start easyblobs
+        run: |
+          set -eu
+          chmod +x /tmp/bin/easyblobs-bin
+          mkdir -p /tmp/eb-data
+          # EASYBLOBS_DEBUG makes the server log every request
+          # ("req GET /artifacts/..."). ci-run.sh uses that count to tell
+          # "the client never reached the mount" apart from "the mount answered
+          # but stored nothing" - without the flag the count is always 0 and
+          # every protocol would look like a bypass.
+          #
+          # The SERVER is a client too: it fetches from the real upstream when a
+          # protocol has no local copy yet (OCI manifests, luarocks index, ...).
+          # It must therefore go THROUGH the proxy, exactly like the package
+          # managers - otherwise it tries a direct connection, which the runner
+          # blocks, and every pull sits for two minutes and ends as 404.
+          HTTP_PROXY=http://127.0.0.1:8888 HTTPS_PROXY=http://127.0.0.1:8888 \
+          NO_PROXY="127.0.0.1,localhost" \
+          EASYBLOBS_DEBUG=1 /tmp/bin/easyblobs-bin --listen "0.0.0.0:${EASYBLOBS_PORT}" \
+            --data /tmp/eb-data --self-base "http://127.0.0.1:${EASYBLOBS_PORT}" \
+            >/tmp/easyblobs.log 2>&1 &
+          i=0
+          until curl -fsS "http://127.0.0.1:${EASYBLOBS_PORT}/healthz" >/dev/null 2>&1; do
+            i=$((i+1)); [ "$i" -gt 120 ] && { cat /tmp/easyblobs.log; exit 1; }
+            sleep 0.5
+          done
+          curl -fsS "http://127.0.0.1:${EASYBLOBS_PORT}/healthz"
+
+      # The runner HAS outbound network, and package managers use it even when
+      # told to use a mirror - which is how rubygems/composer "passed" while
+      # easyblobs saw zero requests. Give the client a proxy that allows ONLY
+      # the mount, so a green result proves the bytes came through easyblobs.
       - name: run the real clients
         run: |
           set -u
