@@ -424,7 +424,11 @@ cached=0
 # A read-only suite passes when the mount demonstrably served it, even though
 # it had nothing to cache.
 if [ "$cached" -ne 1 ] && readonly_protocol "$PROTO"; then
-  rn=$(grep -c "req .* /artifacts/$PROTO" /tmp/easyblobs.log 2>/dev/null)
+  # Count ANY request to this protocol's mount prefix. The old pattern required
+  # a space before /artifacts, which the real log line
+  #   req GET /artifacts/jsr/@luca/flag/meta.json ...
+  # does not have - so every read-only suite looked like it had served nothing.
+  rn=$(grep -c " /artifacts/$(proto_mount "$PROTO")" /tmp/easyblobs.log 2>/dev/null)
   [ -n "$rn" ] || rn=0
   if [ "$rn" -eq 0 ]; then
     echo "FAIL: e2e/$PROTO served nothing from the mount (read-only suite, 0 requests)" >&2

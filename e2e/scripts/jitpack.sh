@@ -19,11 +19,11 @@ XML
 # the jar for the resolved snapshot.
 mvn -B -q -s /tmp/settings-j.xml \
   org.apache.maven.plugins:maven-dependency-plugin:3.6.1:get \
-  -Dartifact=com.github.jitpack:maven-simple:master-SNAPSHOT:pom -Dtransitive=false \
+  -Dartifact=com.github.jitpack:maven-simple:1.4:pom -Dtransitive=false \
   || true
 mvn -B -q -s /tmp/settings-j.xml \
   org.apache.maven.plugins:maven-dependency-plugin:3.6.1:get \
-  -Dartifact=com.github.jitpack:maven-simple:master-SNAPSHOT -Dtransitive=false
+  -Dartifact=com.github.jitpack:maven-simple:1.4 -Dtransitive=false
 jar=$(find "$M2" -name 'maven-simple-*.jar' | head -1)
 [ -n "$jar" ] || { echo "jitpack: maven-simple jar not in the local repository"; exit 1; }
-echo "jitpack: mvn resolved maven-simple master-SNAPSHOT ($(wc -c <"$jar") bytes)"
+echo "jitpack: mvn resolved maven-simple 1.4 ($(wc -c <"$jar") bytes)"

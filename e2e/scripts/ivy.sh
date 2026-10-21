@@ -20,7 +20,18 @@ resolvers += Resolver.url("easyblobs-ivy", url("$IVY_BASE/"))(Resolver.ivyStyleP
 addSbtPlugin("com.typesafe.sbt" % "sbt-native-packager" % "0.7.4")
 PLG
   cd /tmp/ivyproj
-  sbt -batch -Dsbt.log.noformat=true update 2>&1 | tail -6
+  # NOTE: no `| tail` on the command itself. Piping sbt into tail masks its exit
+  # status, so a failed resolution (java missing, network, resolution) looked
+  # like success and the suite then reported nothing about it.
+  if ! sbt -batch -Dsbt.log.noformat=true update 2>&1 | tail -6; then
+    echo "ivy: sbt update failed"
+  fi
+  # sbt keeps resolved artifacts under ~/.ivy2 and ~/.cache/coursier; require
+  # the plugin jar to actually exist there.
+  found=$(find "$HOME/.ivy2" "$HOME/.cache/coursier" -name 'sbt-native-packager*.jar' 2>/dev/null | head -1)
+  [ -n "$found" ] || {
+    echo "ivy: sbt did not resolve sbt-native-packager (no jar in the caches)"
+    exit 1; }
   echo "ivy: sbt resolved sbt-native-packager 0.7.4 through the mirrored Ivy repo"
   exit 0
 fi

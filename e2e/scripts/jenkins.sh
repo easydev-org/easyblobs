@@ -29,8 +29,13 @@ def get(path):
         return r.read()
 uc = get("/update-center.json")
 text = uc.decode("utf-8", "replace")
+# Jenkins wraps the document in a JSONP callback ("updateCenter.post({...});"),
+# so take the first {...} balanced object rather than "everything from the
+# first brace" - the trailing ");" was what broke json.loads last time.
 start = text.find("{")
-data = json.loads(text[start:])           # the real client parses exactly this
+end = text.rfind("}")
+assert start >= 0 and end > start, "no JSON object in the update centre"
+data = json.loads(text[start:end + 1])    # the real client parses exactly this
 assert "updateCenterVersion" in data, "no updateCenterVersion"
 print("jenkins: update-center JSON parses, version", data.get("updateCenterVersion"))
 hpi = get("/download/plugins/git/latest/git.hpi")
