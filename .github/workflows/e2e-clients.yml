@@ -225,11 +225,37 @@ jobs:
             sleep 0.5
           done
           curl -fsS "http://127.0.0.1:${EASYBLOBS_PORT}/healthz"
+
+      # The runner HAS outbound network, and package managers use it even when
+      # told to use a mirror - which is how rubygems/composer "passed" while
+      # easyblobs saw zero requests. Give the client a proxy that allows ONLY
+      # the mount, so a green result proves the bytes came through easyblobs.
+      - name: start the allowlist proxy (mount only, no egress)
+        run: |
+          set -eu
+          ( cd e2e/allowlist-proxy && go mod init allowlistproxy >/dev/null 2>&1 || true )
+          ( cd e2e/allowlist-proxy && go build -o /tmp/allowlist-proxy . )
+          ALLOWED_HOST="127.0.0.1:${EASYBLOBS_PORT}" LISTEN="127.0.0.1:8888" \
+            /tmp/allowlist-proxy >/tmp/allowlist-proxy.log 2>&1 &
+          sleep 1
+          # Prove it: the mount must pass, the public registry must be denied.
+          code=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -x http://127.0.0.1:8888 "http://127.0.0.1:${EASYBLOBS_PORT}/healthz" || echo 000)
+          echo "  via proxy, mount        -> $code"
+          [ "$code" = "200" ] || { echo "FATAL: proxy cannot reach the mount"; cat /tmp/allowlist-proxy.log; exit 1; }
+          denied=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -x http://127.0.0.1:8888 "https://rubygems.org/" 2>/dev/null || echo 000)
+          echo "  via proxy, rubygems.org -> $denied"
+          case "$denied" in
+            000|403) : ;;
+            *) echo "FATAL: the proxy is not blocking egress (got $denied)" >&2; exit 1 ;;
+          esac
           {
             # The ORIGIN only: ci-run.sh derives the per-protocol mount
             # (including /maven/_upstream/<host> for the maven-family suites).
             echo "EASYBLOBS_ORIGIN=http://127.0.0.1:${EASYBLOBS_PORT}"
             echo "EASYBLOBS_DATA=/tmp/eb-data"
+            echo "EASYBLOBS_ALLOWLIST_PROXY=http://127.0.0.1:8888"
           } >> "$GITHUB_ENV"
 
       - name: run the real clients
