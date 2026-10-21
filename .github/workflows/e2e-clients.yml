@@ -229,6 +229,39 @@ jobs:
             fi
             command -v deno >/dev/null && echo "deno: $(deno --version | head -1)" || echo "WARNING: deno not installed"
           fi
+          if has ivy; then
+            # sbt is the client. Use the official launcher script (the
+            # sbtscala/sbt image does not exist under that name).
+            if ! command -v sbt >/dev/null; then
+              curl -fsSL "https://github.com/sbt/sbt/releases/download/v1.10.7/sbt-1.10.7.tgz" -o /tmp/sbt.tgz \
+                && tar -xzf /tmp/sbt.tgz -C /opt \
+                && ln -sf /opt/sbt/bin/sbt /usr/local/bin/sbt || true
+            fi
+            command -v sbt >/dev/null && echo "sbt: present" || echo "WARNING: sbt not installed"
+          fi
+          if has bazel; then
+            # bazelisk is the portable bazel launcher (bazelbuild/bazel is not a
+            # pullable image name).
+            if ! command -v bazel >/dev/null; then
+              curl -fsSL -o /usr/local/bin/bazel \
+                "https://github.com/bazelbuild/bazelisk/releases/download/v1.25.0/bazelisk-linux-amd64" \
+                && chmod +x /usr/local/bin/bazel || true
+            fi
+            command -v bazel >/dev/null && echo "bazel: $(bazel --version 2>/dev/null | head -1)" || echo "WARNING: bazel not installed"
+          fi
+          if has hackage || has stackage; then
+            # cabal via ghcup (the non-interactive path).
+            if ! command -v cabal >/dev/null; then
+              curl -fsSL https://get-ghcup.haskell.org -o /tmp/ghcup.sh
+              BOOTSTRAP_HASKELL_NONINTERACTIVE=1 \
+              BOOTSTRAP_HASKELL_MINIMAL=1 \
+              BOOTSTRAP_HASKELL_INSTALL_NO_STACK=1 \
+                sh /tmp/ghcup.sh >/dev/null 2>&1 || true
+              export PATH="$HOME/.ghcup/bin:$PATH"
+              [ -x "$HOME/.ghcup/bin/cabal" ] && ln -sf "$HOME/.ghcup/bin/cabal" /usr/local/bin/cabal || true
+            fi
+            command -v cabal >/dev/null && echo "cabal: $(cabal --version | head -1)" || echo "WARNING: cabal not installed"
+          fi
           if has cpan; then
             # cpanm is the client this suite drives.
             if ! command -v cpanm >/dev/null; then

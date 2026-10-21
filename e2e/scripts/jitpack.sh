@@ -16,7 +16,7 @@ cat > /tmp/settings-j.xml <<XML
 XML
 mvn -B -q -s /tmp/settings-j.xml \
   org.apache.maven.plugins:maven-dependency-plugin:3.6.1:get \
-  -Dartifact=com.github.jitpack:maven-simple:master-SNAPSHOT
+  -Dartifact=com.github.jitpack:maven-simple:master-SNAPSHOT -Dtransitive=false
 jar=$(find "$M2" -name 'maven-simple-*.jar' | head -1)
 [ -n "$jar" ] || { echo "jitpack: maven-simple jar not in the local repository"; exit 1; }
 echo "jitpack: mvn resolved maven-simple master-SNAPSHOT ($(wc -c <"$jar") bytes)"

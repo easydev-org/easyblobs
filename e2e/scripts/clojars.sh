@@ -15,7 +15,7 @@ cat > /tmp/settings-c.xml <<XML
 XML
 mvn -B -q -s /tmp/settings-c.xml \
   org.apache.maven.plugins:maven-dependency-plugin:3.6.1:get \
-  -Dartifact=ring:ring-core:1.11.0
+  -Dartifact=ring:ring-core:1.11.0 -Dtransitive=false
 jar=$(find "$M2" -name 'ring-core-1.11.0.jar' | head -1)
 [ -n "$jar" ] || { echo "clojars: ring-core jar not in the local repository"; exit 1; }
 echo "clojars: mvn resolved ring:ring-core:1.11.0 ($(wc -c <"$jar") bytes)"

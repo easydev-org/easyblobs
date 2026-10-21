@@ -407,7 +407,10 @@ readonly_protocol() {
     #        a metadata query. `nix-instantiate --eval` is pure evaluation. No
     #        narinfo/nar is downloaded, so nothing is cached, and the suite's
     #        proof is that every nix command succeeds.
-    swift|nix) return 0 ;;
+    # jsr: deno caches the resolved module in ITS OWN store; the adapter answers
+    #      meta.json / version meta / module from upstream and stores nothing,
+    #      so the mount's data dir does not grow.
+    swift|nix|jsr) return 0 ;;
     *) return 1 ;;
   esac
 }

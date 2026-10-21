@@ -51,14 +51,19 @@ google	maven:3.9-eclipse-temurin-21	script runs `mvn dependency:get` for an aar
 clojars	maven:3.9-eclipse-temurin-21	script runs `mvn dependency:get` (Clojars layout)
 spring	maven:3.9-eclipse-temurin-21	script runs `mvn dependency:get` (milestone)
 jitpack	maven:3.9-eclipse-temurin-21	script runs `mvn dependency:get` (SNAPSHOT)
-ivy	sbtscala/sbt:1.10.7-jdk21	script runs `sbt update` against the Ivy repo
-bazel	bazelbuild/bazel:8.0.1	script runs `bazel mod graph` via the mirrored BCR
-hackage	haskell:9.8	script runs `cabal get` from the mirrored index
-stackage	haskell:9.8	script runs `cabal build --dry-run` with the snapshot config
-cpan	perl:5.40	script runs `cpanm DBI` from the mirrored CPAN
-opam	ocaml/opam:debian-12-ocaml-5.2	script runs `opam init` against the mirror
-pecl	php:8.4-cli	script runs `pecl download`
-jenkins	jenkins/jenkins:lts-jdk21	script runs `jenkins-plugin-cli`
+# sbt / bazel / cabal / cpanm / opam / pecl / jenkins-plugin-cli are installed
+# into a plain ubuntu image (see the workflow) instead of pulling one image per
+# toolchain: several of the obvious images do not exist under those names, and
+# a job container whose /__w perms differ breaks the runner's own state files
+# (EACCES on save_state). One Debian base keeps the runner happy.
+ivy	ubuntu:24.04	sbt installed in the job; runs `sbt update` against the Ivy repo
+bazel	ubuntu:24.04	bazelisk installed in the job; runs `bazel mod graph` via the BCR
+hackage	ubuntu:24.04	ghcup+cabal installed in the job; runs `cabal get`
+stackage	ubuntu:24.04	cabal installed in the job; parses the snapshot config
+cpan	ubuntu:24.04	cpanm installed in the job; runs `cpanm DBI`
+opam	ubuntu:24.04	opam installed in the job; runs `opam init` against the mirror
+pecl	ubuntu:24.04	php+pecl installed in the job; runs `pecl download`
+jenkins	ubuntu:24.04	jenkins-plugin-cli installed in the job
 conda	continuumio/miniconda3	script runs `conda create` / `conda run`
 nuget	mcr.microsoft.com/dotnet/sdk:9.0	script runs `dotnet` (v3/index.json source)
 hex	elixir:1.17	script runs `mix` + hex archive

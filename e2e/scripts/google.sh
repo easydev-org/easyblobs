@@ -23,7 +23,7 @@ XML
 
 mvn -B -q -s /tmp/settings-g.xml \
   org.apache.maven.plugins:maven-dependency-plugin:3.6.1:get \
-  -Dartifact=androidx.core:core:1.13.0:aar
+  -Dartifact=androidx.core:core:1.13.0:aar -Dtransitive=false
 
 aar=$(find "$M2" -name 'core-1.13.0.aar' | head -1)
 [ -n "$aar" ] || { echo "google: androidx core aar not in the local repository"; exit 1; }
