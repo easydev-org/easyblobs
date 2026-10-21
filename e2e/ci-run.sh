@@ -265,7 +265,25 @@ X
           pc=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "$EASYBLOBS_BASE/packages.json" 2>/dev/null)
           echo "mount /packages.json -> $pc"
         fi
-        composer require --no-interaction --no-progress --no-cache psr/container
+        # `composer require` on a directory that already has composer.lock /
+        # vendor (this image ships both under some paths) prints
+        # "Installing dependencies from lock file" and never resolves, so no
+        # request ever reaches the mount. Remove any lock and vendor, then
+        # force a real UPDATE against the mount.
+        rm -f composer.lock
+        rm -rf vendor
+        composer update --no-interaction --no-progress --no-cache psr/container
+        echo "requests seen by the mount (composer):"
+        grep -c 'req .* /artifacts/composer' /tmp/easyblobs.log 2>/dev/null | tail -1 || true
+        # Fail here with a precise message rather than at the generic cache
+        # assertion: "composer never asked the mount" is a different bug from
+        # "the mount answered but nothing was stored".
+        cn=$(grep -c 'req .* /artifacts/composer' /tmp/easyblobs.log 2>/dev/null)
+        [ -n "$cn" ] || cn=0
+        if [ "$cn" -eq 0 ]; then
+          echo "FAIL: composer completed without ever requesting the mount" >&2
+          exit 1
+        fi
         php -r 'require "vendor/autoload.php"; echo "composer + psr/container: ", interface_exists("Psr\\Container\\ContainerInterface") ? "ok" : "missing", "\n";'
         return 0
       fi
