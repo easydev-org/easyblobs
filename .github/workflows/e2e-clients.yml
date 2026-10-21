@@ -265,11 +265,19 @@ jobs:
               # image and adduser refuses the user without it:
               #   info: The home dir /var/empty you specified can't be accessed
               mkdir -p /var/empty
-              for i in $(seq 1 10); do
-                adduser --system --disabled-password --home /var/empty \
-                  --ingroup nixbld --no-create-home \
-                  --gecos "Nix build user $i" "nixbld$i" 2>/dev/null || true
+              # `adduser` here is a perl script that needs a writable /etc and a
+              # existing skel dir; in a bare container it silently declined and
+              # the installer then reported
+              #   error: the build users group 'nixbld' has no members
+              # Use useradd (shadow-utils), which is non-interactive, and verify
+              # the group actually has members before continuing.
+              for i in 1 2 3 4 5 6 7 8 9 10; do
+                id "nixbld$i" >/dev/null 2>&1 || \
+                  useradd --system --home-dir /var/empty --no-create-home \
+                    --shell /usr/sbin/nologin --gid nixbld \
+                    --comment "Nix build user $i" "nixbld$i" 2>/dev/null || true
               done
+              echo "nixbld members: $(getent group nixbld | cut -d: -f4)"
               # Keep the installer's FULL output: the previous "--no-daemon
               # --no-modify-profile" attempt hid the real reason behind 'tail -5'.
               /tmp/nix-${NIX_VER}-x86_64-linux/install --no-daemon \

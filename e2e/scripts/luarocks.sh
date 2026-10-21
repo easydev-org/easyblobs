@@ -13,8 +13,11 @@ echo "luarocks install (server=$EASYBLOBS_BASE)"
 # alpine/busybox client resolving differently is a real possibility.
 echo "luarocks: probing the mount first"
 if command -v wget >/dev/null; then
-  wget -qS -O /dev/null --timeout=15 "$EASYBLOBS_BASE/manifest-5.4" 2>&1 | head -8 || \
-    echo "luarocks: WARNING the mount did not answer for manifest-5.4"
+  for f in manifest manifest-5.4; do
+    echo "  probe $f:"
+    wget -qS -O /dev/null --timeout=20 "$EASYBLOBS_BASE/$f" 2>&1 | grep -E 'HTTP/|Length|Content-Type' | head -3 || \
+      echo "  (no answer for $f)"
+  done
 fi
 # A CONFIG FILE, not just --server. luarocks falls back to luarocks.org when its
 # search does not find a manifest, and --server alone did not make it use the
