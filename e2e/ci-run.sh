@@ -245,10 +245,10 @@ X
         cd "$d"
         cat > composer.json <<X
 {
+  "require": { "psr/container": "^2.0" },
   "repositories": [
     { "type": "composer", "url": "$EASYBLOBS_BASE/" }
   ],
-  "repositories-priority": ["easy-platform"],
   "config": { "secure-http": false }
 }
 X
@@ -265,14 +265,16 @@ X
           pc=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "$EASYBLOBS_BASE/packages.json" 2>/dev/null)
           echo "mount /packages.json -> $pc"
         fi
-        # `composer require` on a directory that already has composer.lock /
-        # vendor (this image ships both under some paths) prints
-        # "Installing dependencies from lock file" and never resolves, so no
-        # request ever reaches the mount. Remove any lock and vendor, then
-        # force a real UPDATE against the mount.
+        # Requirements are declared in composer.json and the resolution is run
+        # as a plain `composer update` - NOT `composer update <pkg>`, which
+        # refuses to run without an existing lock:
+        #   "Cannot update only a partial set of packages without a lock file
+        #    present."
+        # Any lock/vendor from the image is removed first, so the update has to
+        # resolve against the mount.
         rm -f composer.lock
         rm -rf vendor
-        composer update --no-interaction --no-progress --no-cache psr/container
+        composer update --no-interaction --no-progress --no-cache
         echo "requests seen by the mount (composer):"
         grep -c 'req .* /artifacts/composer' /tmp/easyblobs.log 2>/dev/null | tail -1 || true
         # Fail here with a precise message rather than at the generic cache
