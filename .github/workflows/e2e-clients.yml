@@ -278,6 +278,23 @@ jobs:
                     --comment "Nix build user $i" "nixbld$i" 2>/dev/null || true
               done
               echo "nixbld members: $(getent group nixbld | cut -d: -f4)"
+              if [ -z "$(getent group nixbld | cut -d: -f4)" ]; then
+                # useradd also declined (shadow-utils missing, or /etc not
+                # writable). Fall back to editing /etc/passwd + /etc/group
+                # directly - that is all Nix actually needs: names that resolve.
+                echo "nixbld still empty; writing /etc/passwd and /etc/group by hand"
+                if ! getent group nixbld >/dev/null 2>&1; then
+                  echo "nixbld:x:30000:" >> /etc/group
+                fi
+                for i in 1 2 3 4 5 6 7 8 9 10; do
+                  getent passwd "nixbld$i" >/dev/null 2>&1 || \
+                    echo "nixbld$i:x:$((30000+i)):30000:Nix build user $i:/var/empty:/usr/sbin/nologin" >> /etc/passwd
+                done
+                # List the members in the group entry so getent agrees.
+                MEMBERS=$(for i in 1 2 3 4 5 6 7 8 9 10; do printf 'nixbld%s,' "$i"; done | sed 's/,$//')
+                sed -i "s|^nixbld:x:30000:.*|nixbld:x:30000:$MEMBERS|" /etc/group
+                echo "nixbld members now: $(getent group nixbld | cut -d: -f4)"
+              fi
               # Keep the installer's FULL output: the previous "--no-daemon
               # --no-modify-profile" attempt hid the real reason behind 'tail -5'.
               /tmp/nix-${NIX_VER}-x86_64-linux/install --no-daemon \

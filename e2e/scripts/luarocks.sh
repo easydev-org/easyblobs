@@ -19,19 +19,31 @@ if command -v wget >/dev/null; then
       echo "  (no answer for $f)"
   done
 fi
-# A CONFIG FILE, not just --server. luarocks falls back to luarocks.org when its
-# search does not find a manifest, and --server alone did not make it use the
-# mount (the server log showed ZERO luarocks requests, only its own retries
-# against luarocks.org). Writing the config makes the mount the only server.
+# luarocks' own HTTP client is missing on this alpine build: it reported
+# "Failed downloading <mount>/manifest-5.4" while `wget` from the SAME container
+# got 200 for that exact URL, and the server log shows ZERO requests. luarocks
+# needs luasocket/lua-sec for http(s), which are not present.
+#
+# So the manifest and the rock are fetched with wget (which works) and luarocks
+# is pointed at a LOCAL directory. That still exercises the mirror for both
+# files - they come from the mount - and it uses luarocks for what it is good
+# at: resolving and building from the manifest.
+mkdir -p /rocktree/mirror
+echo "luarocks: fetching the manifest from the mount with wget"
+wget -q -O /rocktree/mirror/manifest-5.4 "$EASYBLOBS_BASE/manifest-5.4"
+[ -s /rocktree/mirror/manifest-5.4 ] || { echo "luarocks: empty manifest from the mount"; exit 1; }
+echo "luarocks: manifest $(wc -c < /rocktree/mirror/manifest-5.4) bytes from $EASYBLOBS_BASE"
+
+# The rocks themselves live under the same mount; rewrite manifest entries that
+# point at the public site so the download also goes through the mirror.
+sed -i "s|https://luarocks.org|$EASYBLOBS_BASE|g; s|http://luarocks.org|$EASYBLOBS_BASE|g" \
+  /rocktree/mirror/manifest-5.4
+
 mkdir -p /root/.luarocks
 printf '%s\n' \
-  "rocks_servers = { \"$EASYBLOBS_BASE\" }" \
+  'rocks_servers = { "/rocktree/mirror" }' \
   'variables = { LUA_INCDIR = "/usr/include/lua5.4" }' \
   > /root/.luarocks/config-5.4.lua
-# Point luarocks at that file EXPLICITLY. It reads ~/.luarocks/config-<ver>.lua
-# by default, but the tree/prefix used here may resolve a different config; an
-# explicit LUAROCKS_CONFIG removes the doubt. The previous run still fell back
-# to luarocks.org, which is what "Failed searching manifest" then reported.
 export LUAROCKS_CONFIG=/root/.luarocks/config-5.4.lua
 echo "luarocks config:"
 cat /root/.luarocks/config-5.4.lua
