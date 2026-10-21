@@ -336,6 +336,18 @@ X
         echo "(hex prep done)"
       fi
       ;;
+    huggingface)
+      # The suite starts with `pip install huggingface_hub`, i.e. it installs
+      # its CLIENT from PyPI. The allowlist proxy blocks PyPI by design, so that
+      # install must happen OUTSIDE the measured window: do it here with egress
+      # open, then run the suite with the mount as the only reachable registry.
+      if command -v pip >/dev/null; then
+        prep_open_egress
+        pip install --no-cache-dir --disable-pip-version-check --quiet huggingface_hub >/dev/null 2>&1
+        prep_restore_egress
+        python3 -c 'import huggingface_hub; print("huggingface_hub", huggingface_hub.__version__, "installed outside the mirror window")' || true
+      fi
+      ;;
   esac
   return 1
 }
@@ -348,6 +360,27 @@ cd "$WORK"
 echo "=== e2e/$PROTO (base=$EASYBLOBS_BASE, CAS before: $before files) ==="
 # A per-protocol override (prep_client) wins over the suite's own script when
 # the stock image already ships what the script installs.
+
+# Some suites INSTALL their client first (pip install huggingface_hub, conan
+# via pip, ...). Those installs legitimately need a real package index, which
+# the allowlist proxy blocks - so they hang or fail before the protocol is
+# exercised. Give the install phase unrestricted egress, then restore the
+# restriction for the measured test window.
+prep_restore_egress() {
+  if [ -n "${EASYBLOBS_ALLOWLIST_PROXY:-}" ]; then
+    export http_proxy="$EASYBLOBS_ALLOWLIST_PROXY"
+    export https_proxy="$EASYBLOBS_ALLOWLIST_PROXY"
+    export HTTP_PROXY="$EASYBLOBS_ALLOWLIST_PROXY"
+    export HTTPS_PROXY="$EASYBLOBS_ALLOWLIST_PROXY"
+    export NO_PROXY="127.0.0.1,localhost"
+    export no_proxy="127.0.0.1,localhost"
+  fi
+}
+prep_open_egress() {
+  unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
+  export NO_PROXY="*"
+  export no_proxy="*"
+}
 
 if prep_client; then
   echo "(used the per-protocol client override)"
