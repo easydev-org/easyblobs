@@ -222,6 +222,49 @@ jobs:
             git lfs install >/dev/null 2>&1 || true
             command -v git-lfs >/dev/null && echo "git-lfs: $(git lfs version)"
           fi
+          if has jsr; then
+            # The real JSR client is deno.
+            if ! command -v deno >/dev/null; then
+              curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh >/dev/null 2>&1 || true
+            fi
+            command -v deno >/dev/null && echo "deno: $(deno --version | head -1)" || echo "WARNING: deno not installed"
+          fi
+          if has cpan; then
+            # cpanm is the client this suite drives.
+            if ! command -v cpanm >/dev/null; then
+              if command -v apt-get >/dev/null; then
+                apt-get update -qq && apt-get install -y -qq cpanminus build-essential >/dev/null
+              fi
+            fi
+            command -v cpanm >/dev/null && echo "cpanm: present" || echo "WARNING: cpanm not installed"
+          fi
+          if has opam; then
+            if ! command -v opam >/dev/null && command -v apt-get >/dev/null; then
+              apt-get update -qq && apt-get install -y -qq opam >/dev/null
+            fi
+            command -v opam >/dev/null && echo "opam: $(opam --version)" || echo "WARNING: opam not installed"
+          fi
+          if has pecl; then
+            # `pecl download` also needs the build toolchain for phpize.
+            if command -v apt-get >/dev/null; then
+              apt-get update -qq && apt-get install -y -qq php-dev build-essential >/dev/null 2>&1 || true
+            fi
+            command -v pecl >/dev/null && echo "pecl: present" || echo "WARNING: pecl not installed"
+          fi
+          if has jenkins; then
+            if ! command -v jenkins-plugin-cli >/dev/null; then
+              JPCLI=https://github.com/jenkinsci/plugin-installation-manager-tool/releases/download/2.12.15/jenkins-plugin-manager-2.12.15.jar
+              curl -fsSL -o /opt/jpm.jar "$JPCLI" 2>/dev/null || true
+              if [ -s /opt/jpm.jar ]; then
+                printf '%s\n' '#!/bin/sh' 'exec java -jar /opt/jpm.jar "$@"' > /usr/local/bin/jenkins-plugin-cli
+                chmod +x /usr/local/bin/jenkins-plugin-cli
+              fi
+            fi
+            command -v jenkins-plugin-cli >/dev/null && echo "jenkins-plugin-cli: present" || echo "WARNING: jenkins-plugin-cli not installed"
+          fi
+          if has stackage && ! command -v cabal >/dev/null; then
+            echo "WARNING: cabal not installed for the stackage suite"
+          fi
           if has juliapkg && command -v apt-get >/dev/null; then
             apt-get update -qq && apt-get install -y -qq ca-certificates >/dev/null
           fi

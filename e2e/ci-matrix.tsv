@@ -31,8 +31,8 @@ netcache	ubuntu:24.04	script uses curl (Range + repeat-fetch identity)
 
 # --- images that carry the client ---
 npm	node:22	script runs `npm install`
-jsrnpm	node:22	script uses wget against an npm-style packument
-jsr	node:22	script uses wget against the JSR REST API
+jsrnpm	node:22	script runs `npm install` against the npm-compatible packument
+jsr	node:22	script runs `deno cache` against the JSR registry
 pypi	python:3.12	script runs `pip install`
 huggingface	python:3.12	script runs `pip install` + huggingface_hub
 conan	python:3.12	script runs `conan` (installed via pip in the job)
@@ -41,19 +41,24 @@ cargo	rust:1	script runs `cargo` with a crates-io source replacement
 rubygems	ruby:3.3	script runs `gem install`
 composer	composer:2	script runs `composer require` + php
 maven	maven:3.9-eclipse-temurin-21	script runs `mvn`
-gradle	gradle:8-jdk21	script uses wget for a kotlin-stdlib pom
-google	gradle:8-jdk21	wget: AGP pom + androidx aar
-clojars	gradle:8-jdk21	wget: ring-core pom + jar
-spring	gradle:8-jdk21	wget: spring-core milestone pom
-jitpack	gradle:8-jdk21	wget: jitpack pom
-ivy	gradle:8-jdk21	wget: ivy descriptor + jar (cache identity check)
-bazel	gradle:8-jdk21	wget: BCR metadata.json + source.json
-hackage	gradle:8-jdk21	wget: 01-index.tar.gz + a package tarball
-stackage	gradle:8-jdk21	wget: lts cabal.config
-cpan	gradle:8-jdk21	wget: 02packages index + DBI tarball
-opam	gradle:8-jdk21	wget: opam index tarball + dune opam file
-pecl	gradle:8-jdk21	wget: PECL tarball
-jenkins	gradle:8-jdk21	wget: update-center.json + plugin hpi
+# --- one image per real client toolchain ---
+#
+# These used to share `gradle:8-jdk21` because every suite was a wget probe.
+# Now that each drives the REAL client, each needs the toolchain that client
+# belongs to: mvn, sbt, bazel, cabal, opam, cpanm, pecl, jenkins-plugin-cli.
+gradle	maven:3.9-eclipse-temurin-21	script runs `mvn dependency:get`
+google	maven:3.9-eclipse-temurin-21	script runs `mvn dependency:get` for an aar
+clojars	maven:3.9-eclipse-temurin-21	script runs `mvn dependency:get` (Clojars layout)
+spring	maven:3.9-eclipse-temurin-21	script runs `mvn dependency:get` (milestone)
+jitpack	maven:3.9-eclipse-temurin-21	script runs `mvn dependency:get` (SNAPSHOT)
+ivy	sbtscala/sbt:1.10.7-jdk21	script runs `sbt update` against the Ivy repo
+bazel	bazelbuild/bazel:8.0.1	script runs `bazel mod graph` via the mirrored BCR
+hackage	haskell:9.8	script runs `cabal get` from the mirrored index
+stackage	haskell:9.8	script runs `cabal build --dry-run` with the snapshot config
+cpan	perl:5.40	script runs `cpanm DBI` from the mirrored CPAN
+opam	ocaml/opam:debian-12-ocaml-5.2	script runs `opam init` against the mirror
+pecl	php:8.4-cli	script runs `pecl download`
+jenkins	jenkins/jenkins:lts-jdk21	script runs `jenkins-plugin-cli`
 conda	continuumio/miniconda3	script runs `conda create` / `conda run`
 nuget	mcr.microsoft.com/dotnet/sdk:9.0	script runs `dotnet` (v3/index.json source)
 hex	elixir:1.17	script runs `mix` + hex archive

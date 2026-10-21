@@ -1,9 +1,22 @@
 #!/bin/sh
-# JitPack: a Maven-layout mirror at the named target mount. JitPack only serves
-# artifacts it has built; master-SNAPSHOT for a known repo works.
+# JitPack mirrored at the named target (builds-on-demand Maven layout).
+# Real Maven client against a SNAPSHOT coordinate, which needs snapshot
+# metadata handling that a wget probe does not exercise.
 set -e
 : "${EASYBLOBS_BASE:?EASYBLOBS_BASE not set}"
-wget -qO /tmp/jitpack.pom \
-  "$EASYBLOBS_BASE/com/github/jitpack/maven-simple/master-SNAPSHOT/maven-simple-master-SNAPSHOT.pom"
-grep -q "maven-simple" /tmp/jitpack.pom || { echo "jitpack: bad pom"; exit 1; }
-echo "jitpack: maven-simple master-SNAPSHOT pom ok"
+M2=/tmp/m2j
+rm -rf "$M2"
+cat > /tmp/settings-j.xml <<XML
+<settings>
+  <localRepository>$M2</localRepository>
+  <mirrors>
+    <mirror><id>easyblobs</id><url>$EASYBLOBS_BASE</url><mirrorOf>*</mirrorOf></mirror>
+  </mirrors>
+</settings>
+XML
+mvn -B -q -s /tmp/settings-j.xml \
+  org.apache.maven.plugins:maven-dependency-plugin:3.6.1:get \
+  -Dartifact=com.github.jitpack:maven-simple:master-SNAPSHOT
+jar=$(find "$M2" -name 'maven-simple-*.jar' | head -1)
+[ -n "$jar" ] || { echo "jitpack: maven-simple jar not in the local repository"; exit 1; }
+echo "jitpack: mvn resolved maven-simple master-SNAPSHOT ($(wc -c <"$jar") bytes)"

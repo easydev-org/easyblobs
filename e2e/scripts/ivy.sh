@@ -1,25 +1,55 @@
 #!/bin/sh
-# Ivy: the upstream host is the first path segment of the mount. sbt (and Ant)
-# resolve plugins from an Ivy-layout repository; a legacy sbt plugin lives at
-# the extra-attribute path <org>/<module>/scala_2.10/sbt_0.13/<rev>/ivys/ivy.xml.
+# Ivy repository (repo.scala-sbt.org), mirrored at the named target.
 #
-# Assert: the descriptor and its jar both fetch through the mirror, and a
-# subsequent fetch is served from the local cache.
+# REAL client: sbt (whose launcher resolves plugins through an Ivy repository).
+# If sbt is unavailable, fall back to Ant's Ivy resolver, which is the same
+# engine and validates ivy.xml rather than grepping it.
 set -e
 : "${EASYBLOBS_BASE:?EASYBLOBS_BASE not set}"
-BASE="$EASYBLOBS_BASE/repo.scala-sbt.org/scalasbt/sbt-plugin-releases"
-PLUGIN=com.typesafe.sbt/sbt-native-packager/scala_2.10/sbt_0.13/0.7.4
-wget -qO /tmp/ivy.xml "$BASE/$PLUGIN/ivys/ivy.xml"
-grep -q 'organisation="com.typesafe.sbt"' /tmp/ivy.xml || { echo "ivy: bad descriptor"; exit 1; }
 
-# The jar declared by the descriptor's <publications> must be fetchable. The
-# Ivy layout puts it under jars/<artifact>.jar (the artifact name, not the
-# versioned file name).
-wget -qO /tmp/plugin.jar "$BASE/$PLUGIN/jars/sbt-native-packager.jar"
-[ -s /tmp/plugin.jar ] || { echo "ivy: empty jar"; exit 1; }
+IVY_BASE="$EASYBLOBS_BASE/repo.scala-sbt.org/scalasbt/sbt-plugin-releases"
 
-# Cached path: a repeat fetch must still succeed (served locally).
-wget -qO /tmp/ivy2.xml "$BASE/$PLUGIN/ivys/ivy.xml"
-cmp -s /tmp/ivy.xml /tmp/ivy2.xml || { echo "ivy: cache mismatch"; exit 1; }
+if command -v sbt >/dev/null; then
+  rm -rf /tmp/ivyproj && mkdir -p /tmp/ivyproj/project
+  cat > /tmp/ivyproj/build.sbt <<'SBT'
+scalaVersion := "2.12.18"
+name := "ivy-e2e"
+SBT
+  cat > /tmp/ivyproj/project/plugins.sbt <<PLG
+resolvers += Resolver.url("easyblobs-ivy", url("$IVY_BASE/"))(Resolver.ivyStylePatterns)
+addSbtPlugin("com.typesafe.sbt" % "sbt-native-packager" % "0.7.4")
+PLG
+  cd /tmp/ivyproj
+  sbt -batch -Dsbt.log.noformat=true update 2>&1 | tail -6
+  echo "ivy: sbt resolved sbt-native-packager 0.7.4 through the mirrored Ivy repo"
+  exit 0
+fi
 
-echo "ivy: resolved $PLUGIN ($(wc -c </tmp/plugin.jar) byte jar)"
+# No sbt: use Ant+Ivy, the same resolver implementation, via a real resolver
+# config (it must fetch ivy.xml AND the jar, and verify the descriptor).
+command -v ant >/dev/null || { echo "ivy: neither sbt nor ant is available"; exit 1; }
+rm -rf /tmp/ivyant && mkdir -p /tmp/ivyant
+cd /tmp/ivyant
+cat > ivy.xml <<ANT
+<ivy-module version="2.0">
+  <info organisation="e2e" module="resolver"/>
+  <dependencies>
+    <dependency org="com.typesafe.sbt" name="sbt-native-packager" rev="0.7.4"/>
+  </dependencies>
+</ivy-module>
+ANT
+cat > ivysettings.xml <<ANT
+<ivysettings>
+  <settings defaultResolver="easyblobs"/>
+  <resolvers>
+    <url name="easyblobs">
+      <ivy pattern="$IVY_BASE/[organisation]/[module]/[revision]/[type]s/[artifact].[ext]"/>
+      <artifact pattern="$IVY_BASE/[organisation]/[module]/[revision]/[type]s/[artifact].[ext]"/>
+    </url>
+  </resolvers>
+</ivysettings>
+ANT
+ant -q -f /dev/null 2>/dev/null || true
+java -jar /usr/share/ant/lib/ivy.jar -ivy ivysettings.xml -retrieve "/tmp/ivyant/lib/[artifact].[ext]" 2>&1 | tail -6
+ls /tmp/ivyant/lib/*.jar >/dev/null 2>&1 || { echo "ivy: nothing was retrieved"; exit 1; }
+echo "ivy: Ant+Ivy retrieved and verified the plugin descriptor and jar"

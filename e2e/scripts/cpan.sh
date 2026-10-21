@@ -1,11 +1,38 @@
 #!/bin/sh
-# CPAN (Perl): a plain HTTP tree. Fetch the package index and a distribution
-# from the artifact mount (which mirrors cpan.metacpan.org) — what cpanm does
-# before it builds a module.
+# CPAN mirrored at the named target: install a real distribution with cpanm.
+#
+# cpanm (App::cpanminus) is the client: it downloads the index AND the tarball,
+# unpacks it, runs the build, and only then reports success - which is a much
+# stronger statement than "the tarball downloaded".
 set -e
 : "${EASYBLOBS_BASE:?EASYBLOBS_BASE not set}"
-wget --header='Range: bytes=0-131071' -qO /tmp/02packages "$EASYBLOBS_BASE/modules/02packages.details.txt.gz"
-[ -s /tmp/02packages ] || { echo "cpan: empty index"; exit 1; }
-wget -qO /tmp/DBI.tar.gz "$EASYBLOBS_BASE/authors/id/T/TI/TIMB/DBI-1.643.tar.gz"
-tar -tzf /tmp/DBI.tar.gz >/dev/null || { echo "cpan: bad tarball"; exit 1; }
-echo "cpan: 02packages + DBI-1.643.tar.gz ok"
+
+# Point CPAN/cpanm at the mirror only.
+mkdir -p /root/.cpan
+cat > /root/.cpan/CPAN/MyConfig.pm <<PM
+\$CPAN::Config = {
+  'urllist' => ['$EASYBLOBS_BASE'],
+  'build_dir' => q[/tmp/cpanbuild],
+  'cpan_home' => q[/tmp/cpanhome],
+  'mbuild_arg' => q[],
+};
+1;
+PM
+mkdir -p /tmp/cpanhome/CPAN
+cat > /tmp/cpanhome/CPAN/MyConfig.pm <<PM
+\$CPAN::Config = {
+  'urllist' => ['$EASYBLOBS_BASE'],
+  'build_dir' => q[/tmp/cpanbuild],
+  'cpan_home' => q[/tmp/cpanhome],
+};
+1;
+PM
+
+export PERL_MM_USE_DEFAULT=1
+export PERL_CPANM_OPT="--mirror $EASYBLOBS_BASE --mirror-only"
+
+if ! command -v cpanm >/dev/null; then
+  echo "cpan: cpanm not installed"; exit 1
+fi
+cpanm --notest --quiet DBI
+perl -MDBI -e 'print "cpan: DBI ", $DBI::VERSION, " loaded\n"'
