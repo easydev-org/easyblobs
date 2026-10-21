@@ -306,11 +306,19 @@ jobs:
       - name: run the real clients
         run: |
           set -u
+          # `sh e2e/ci-run.sh` produced NOTHING in the previous run, which means
+          # the script died before its first echo. Trace it so the exact line is
+          # visible, and echo the environment it needs.
+          echo "ORIGIN=${EASYBLOBS_ORIGIN:-unset}"
+          echo "DATA=${EASYBLOBS_DATA:-unset}"
+          echo "ALLOWLIST=${EASYBLOBS_ALLOWLIST_PROXY:-unset}"
           fail=""
           for p in ${{ matrix.protocols }}; do
-            if ! sh e2e/ci-run.sh "$p"; then
+            echo "::group::e2e $p"
+            if ! sh -x e2e/ci-run.sh "$p"; then
               fail="$fail $p"
             fi
+            echo "::endgroup::"
           done
           if [ -n "$fail" ]; then
             echo "FAILED protocols:$fail" >&2
