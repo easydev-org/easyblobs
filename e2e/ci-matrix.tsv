@@ -13,13 +13,13 @@
 # and the setup-* steps the workflow installs).
 
 # --- the runner itself ---
-git	host	script runs `git clone`
-gitlfs	host	`git clone` + `git lfs` (installed via apt in the job)
-go	host	script runs `go get` with GOPROXY pointed at the mount
-protobuf	host	script runs `buf build` (installed via setup-buf)
-swift	host	script drives the REST API with python3 urllib
-netcache	host	script uses curl (Range + repeat-fetch identity)
-oci	host	script uses wget + tar (manifest/index/blob walk, no docker)
+git	ubuntu:24.04	script runs `git clone` (git installed in the job)
+gitlfs	ubuntu:24.04	script runs `git clone` + `git lfs` (installed in the job)
+go	ubuntu:24.04	script runs `go get` (go via setup-go in the job)
+protobuf	ubuntu:24.04	script runs `buf build` (buf downloaded in the job)
+swift	ubuntu:24.04	script drives the REST API with python3 urllib
+netcache	ubuntu:24.04	script uses curl (Range + repeat-fetch identity)
+oci	ubuntu:24.04	script uses wget + tar (manifest/index/blob walk, no docker)
 
 # --- images that carry the client ---
 npm	node:22	script runs `npm install`

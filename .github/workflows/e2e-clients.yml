@@ -8,8 +8,13 @@ name: e2e-clients
 # mapping lives in e2e/ci-matrix.tsv so adding a protocol is a one-line change
 # there, not in this file.
 #
-# The server runs on the RUNNER (so the image only needs the client), and the
-# job container reaches it through host networking.
+# The server runs INSIDE the job container, next to the client. That is simpler
+# and avoids a real Actions limitation: the runner already starts the job
+# container with its own --network github_network_..., so adding
+# `options: --network host` makes `docker create` fail with exit 125 ("Value
+# cannot be null. (Parameter 'ContainerId')") before any step runs.
+# Because both processes share the container's network namespace, 127.0.0.1
+# works and nothing extra is needed.
 
 on:
   push:
@@ -88,7 +93,6 @@ jobs:
     # host networking so the container reaches the runner's 127.0.0.1:8080
     container:
       image: ${{ matrix.driver }}
-      options: --network host
     steps:
       - uses: actions/checkout@v4
 
@@ -116,6 +120,16 @@ jobs:
           set -euo pipefail
           P=" ${{ matrix.protocols }} "
           has() { case "$P" in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+          # ubuntu:24.04 is a bare image: the CI plumbing itself needs these.
+          if command -v apt-get >/dev/null; then
+            need=""
+            for t in curl wget tar git python3 unzip; do
+              command -v "$t" >/dev/null || need="$need $t"
+            done
+            if [ -n "$need" ]; then
+              apt-get update -qq && apt-get install -y -qq $need >/dev/null
+            fi
+          fi
           if has conan; then
             python3 -m pip install --quiet --disable-pip-version-check conan
           fi
@@ -124,6 +138,12 @@ jobs:
           fi
           if has gitlfs && command -v apt-get >/dev/null; then
             apt-get update -qq && apt-get install -y -qq git-lfs >/dev/null && git lfs install
+          fi
+          if has juliapkg && command -v apt-get >/dev/null; then
+            apt-get update -qq && apt-get install -y -qq ca-certificates >/dev/null
+          fi
+          if has cran && command -v apt-get >/dev/null; then
+            apt-get update -qq && apt-get install -y -qq libcurl4-openssl-dev >/dev/null || true
           fi
           if has protobuf; then
             # `buf build` is what the script asserts with.
