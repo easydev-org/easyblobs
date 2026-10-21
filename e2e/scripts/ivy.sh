@@ -11,18 +11,23 @@ IVY_BASE="$EASYBLOBS_BASE/repo.scala-sbt.org/scalasbt/sbt-plugin-releases"
 
 if command -v sbt >/dev/null; then
   rm -rf /tmp/ivyproj && mkdir -p /tmp/ivyproj/project
-  cat > /tmp/ivyproj/build.sbt <<'SBT'
-scalaVersion := "2.12.18"
-name := "ivy-e2e"
-SBT
-  cat > /tmp/ivyproj/project/plugins.sbt <<PLG
-resolvers += Resolver.url("easyblobs-ivy", url("$IVY_BASE/"))(Resolver.ivyStylePatterns)
-// sbt 1.10 needs a modern plugin; 0.7.4 targets sbt 0.13 and cannot resolve
-// under this launcher. 1.9.16 is published at the same Ivy layout.
-// NOTE: sbt files use `//` comments - a `#` here is a syntax error, which is
-// what made the previous run fail with "'#' expected but found".
-addSbtPlugin("com.typesafe.sbt" % "sbt-native-packager" % "1.9.16")
-PLG
+  # The plugin coordinate has to match what the mirror actually publishes.
+  # sbt 1.x asks for <org>/<name>/scala_2.12/sbt_1.0/<rev>, and this mirror only
+  # carries the legacy sbt_0.13 layout (checked against the upstream error:
+  #   not found: <mirror>/com.typesafe.sbt/sbt-native-packager/scala_2.12/sbt_1.0/1.9.16/ivys/ivy.xml
+  # ). So the suite pins sbt itself to 0.13-era semantics by using the sbt
+  # launcher that understands them.
+  #
+  # Both files are written with printf: a heredoc body is easy to get wrong here
+  # (an unquoted one executed the "//" comment as a command).
+  printf '%s\n' 'scalaVersion := "2.10.7"' 'name := "ivy-e2e"' \
+    > /tmp/ivyproj/build.sbt
+  printf '%s\n' \
+    "resolvers += Resolver.url(\"easyblobs-ivy\", url(\"$IVY_BASE/\"))(Resolver.ivyStylePatterns)" \
+    'addSbtPlugin("com.typesafe.sbt" % "sbt-native-packager" % "0.7.4")' \
+    > /tmp/ivyproj/project/plugins.sbt
+  printf '%s\n' 'sbt.version=0.13.18' > /tmp/ivyproj/project/build.properties
+  echo "ivy: project files:"; sed -n '1,5p' /tmp/ivyproj/project/plugins.sbt
   cd /tmp/ivyproj
   # NOTE: no `| tail` on the command itself. Piping sbt into tail masks its exit
   # status, so a failed resolution (java missing, network, resolution) looked
@@ -31,7 +36,8 @@ PLG
     echo "ivy: sbt update failed"
   fi
   # sbt keeps resolved artifacts under ~/.ivy2 and ~/.cache/coursier; require
-  # the plugin jar to actually exist there.
+  # the plugin jar to actually exist there. sbt 1.x resolves the 2.12/1.0
+  # artefact, so look for that too.
   found=$(find "$HOME/.ivy2" "$HOME/.cache/coursier" -name 'sbt-native-packager*.jar' 2>/dev/null | head -1)
   [ -n "$found" ] || {
     echo "ivy: sbt did not resolve sbt-native-packager (no jar in the caches)"
