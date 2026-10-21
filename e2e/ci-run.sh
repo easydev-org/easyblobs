@@ -43,6 +43,27 @@ export no_proxy="*"
 export GOPROXY="$EASYBLOBS_ORIGIN/artifacts/go"
 export GOSUMDB=off
 
+# ---------------------------------------------------------------- proof -----
+# Before any protocol runs, prove that the mount is reachable AND that the
+# public registry is NOT. If the public registry answers, the client will
+# prefer it and the test proves nothing (that is exactly how rubygems and
+# composer "passed" while easyblobs saw zero requests).
+echo "--- connectivity sentinel ---"
+if command -v curl >/dev/null; then
+  code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "$EASYBLOBS_ORIGIN/healthz" || echo 000)
+  echo "  mount /healthz      -> $code"
+  [ "$code" = "200" ] || { echo "FATAL: the mount is not reachable" >&2; exit 1; }
+  pub=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 https://rubygems.org/ 2>/dev/null || echo 000)
+  echo "  rubygems.org        -> $pub"
+  pub2=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 https://repo.packagist.org/packages.json 2>/dev/null || echo 000)
+  echo "  packagist.org       -> $pub2"
+  # Not fatal (a runner may legitimately have no egress), but loud: with egress
+  # a client CAN bypass the mount, so a green result must be read carefully.
+  case "$pub$pub2" in
+    *200*|*30*) echo "  WARNING: public registries are reachable; the client could bypass the mount." >&2 ;;
+  esac
+fi
+
 # proto_mount mirrors e2e/run.sh: the /artifacts/<x> a protocol lives under.
 proto_mount() {
   case "$1" in
@@ -238,6 +259,15 @@ else
   else
     echo "--- FAILED: e2e/$PROTO (last 60 lines, incl. xtrace) ---" >&2
     tail -60 "$OUT" >&2
+    # The suites use `wget -qO`, which prints NOTHING on failure. Re-run just
+    # the base URL verbosely so a 404/refused/timeout becomes visible.
+    echo "--- probing the mount directly ---" >&2
+    if command -v wget >/dev/null; then
+      wget -S -O /dev/null --timeout=15 "$EASYBLOBS_BASE/" 2>&1 | head -20 >&2 || true
+    fi
+    if command -v curl >/dev/null; then
+      curl -sS -o /dev/null -w 'curl: %{http_code} in %{time_total}s\n' --max-time 15 "$EASYBLOBS_BASE/" >&2 || true
+    fi
     echo "--- easyblobs log (tail) ---" >&2
     tail -30 /tmp/easyblobs.log >&2 || true
     echo "--- preconditions ---" >&2
