@@ -76,11 +76,19 @@ if command -v curl >/dev/null; then
   code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "$EASYBLOBS_ORIGIN/healthz" 2>/dev/null)
   echo "  mount /healthz      -> $code"
   [ "$code" = "200" ] || { echo "FATAL: the mount is not reachable" >&2; exit 1; }
+  # Probing egress is EXPECTED to fail once the allowlist proxy is in place, so
+  # its non-zero exit must not end the script. Under `set -e` it did exactly
+  # that, which silently killed every protocol before its suite ran.
+  set +e
   pub=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 https://rubygems.org/ 2>/dev/null)
-  echo "  rubygems.org        -> $pub"
-  case "$pub" in
-    200|30*) echo "  WARNING: rubygems.org is reachable directly; only the allowlist proxy prevents a bypass." >&2 ;;
-  esac
+  pub_rc=$?
+  set -e
+  echo "  rubygems.org        -> http=${pub:-none} rc=$pub_rc"
+  if [ "$pub_rc" -eq 0 ] && [ "$pub" != "403" ]; then
+    echo "  WARNING: rubygems.org is reachable directly; only the allowlist proxy prevents a bypass." >&2
+  else
+    echo "  egress blocked (as intended)"
+  fi
 fi
 
 # proto_mount mirrors e2e/run.sh: the /artifacts/<x> a protocol lives under.
