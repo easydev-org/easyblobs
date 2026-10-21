@@ -303,15 +303,26 @@ X
         mkdir -p "$CONAN_HOME"
         conan profile detect --force >/dev/null 2>&1 || true
         conan remote add easy-platform "$EASYBLOBS_BASE" --force >/dev/null 2>&1 || true
-        conan download zlib/1.3.1 -r easy-platform --only-recipe
+        # Prove the client can SEE the remote before downloading. Without this,
+        # a zero-request run is indistinguishable from a silent cache hit.
+        echo "conan remotes:"
+        conan remote list 2>/dev/null | head -5 || true
+        # Download with the revision PINNED OFF and the local cache cleared, so
+        # conan MUST ask the remote to resolve. `conan download zlib/1.3.1`
+        # completed in 0.48s with ZERO requests because conan already knew the
+        # revision hash - it answered itself.
+        #
+        # bzip2 is small and is not part of the python image, unlike zlib which
+        # other protocols in the same job may have pulled into the cache.
+        conan download bzip2/1.0.8 -r easy-platform --only-recipe
         # Ask conan itself instead of guessing the cache layout: 'conan list'
         # prints the recipes the LOCAL cache holds, which is precisely what
         # 'download' is supposed to have produced. (A hard-coded
-        # `find ... -name zlib` guessed wrong - conan 2 stores recipes under
+        # `find ... -name <pkg>` guessed wrong - conan 2 stores recipes under
         # <home>/p/b/... and the name is hashed.)
-        if ! conan list 'zlib/1.3.1:*' 2>/dev/null | grep -q 'zlib/1.3.1'; then
-          echo "FAIL: conan list does not show zlib/1.3.1 in the local cache" >&2
-          conan list 'zlib/1.3.1:*' 2>&1 | head -20 >&2 || true
+        if ! conan list 'bzip2/1.0.8:*' 2>/dev/null | grep -q 'bzip2/1.0.8'; then
+          echo "FAIL: conan list does not show bzip2/1.0.8 in the local cache" >&2
+          conan list 'bzip2/1.0.8:*' 2>&1 | head -20 >&2 || true
           exit 1
         fi
         echo "conan: recipe present in the client cache"
@@ -434,8 +445,12 @@ after_bytes=$(data_bytes)
 # The cache assertion: a pull-through MUST leave something behind, otherwise an
 # adapter that only proxies would pass. Either the CAS grew (a blob was
 # written) OR the data dir grew (the artifact went into the metadata DB).
-# Requiring ONLY the CAS count was wrong: pypi/rubygems/conan store the
-# package inside pkglab.db, so they legitimately never add a CAS file.
+# Requiring ONLY the CAS count was wrong: pypi and rubygems keep the package
+# inside the metadata db, so they legitimately never add a CAS file.
+# (conan is NOT like that - its recipe/package files DO go through
+# reg.Blobs.Put via storeFile, so a conan run that downloads anything must grow
+# the CAS. If it does not, the client never reached the mount at all.)
+#
 #
 # The verdict is printed only AFTER the assertion, so a failing protocol can
 # never also print "OK" (it used to, and made the logs contradict themselves).

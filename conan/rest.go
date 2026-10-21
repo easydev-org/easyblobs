@@ -303,6 +303,21 @@ func (s *State) fileGet(w http.ResponseWriter, r *http.Request, name, ver, sub s
 		easyblobkit.OctetResponse(w, r, data)
 		return
 	}
+	// Cache on READ.
+	//
+	// Until now only PUT (upload) called storeFile, so `conan download` received
+	// the bytes while this mirror kept nothing: every later request went back
+	// upstream. That is a proxy, not a mirror - and in an air-gapped or
+	// egress-restricted deployment the first read is all you get.
+	//
+	// Fetch the file, persist it exactly as an upload would (storeFile indexes
+	// it so loadFile finds it next time), then serve it. A genuine upstream 404
+	// still propagates so the client can fall back to building from source.
+	if data, ok := s.fetchUpstreamFile(r, "/conans/"+name+"/"+ver+"/"+sub); ok {
+		storeFile(s.Registry, name, ver, filename, data, r.Context())
+		easyblobkit.OctetResponse(w, r, data)
+		return
+	}
 	s.replyOrProxy(w, r, nil, "/v2/conans/"+easyblobkit.URLencode(name)+"/"+easyblobkit.URLencode(ver)+"/"+sub)
 }
 

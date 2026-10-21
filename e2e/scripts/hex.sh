@@ -3,7 +3,11 @@
 # appends /tarballs, /names, /versions etc. to the mirror URL.
 set -e
 : "${EASYBLOBS_BASE:?EASYBLOBS_BASE not set}"
-export HEX_MIRROR="$EASYBLOBS_BASE/"
+# NO trailing slash. Hex appends "/packages/..." itself, so "base/" produced
+# "//packages/jason"; this server answers that with a 307 redirect and hex does
+# not follow redirects on the registry endpoint - it just times out with
+#   exited in: GenServer.call(Hex.Registry.Server, {:versions, "hexpm", "jason"})
+export HEX_MIRROR="${EASYBLOBS_BASE%/}"
 mix local.rebar --force >/dev/null 2>&1 || true
 # hex itself must be installed before it can be used. The project's own tool
 # image bakes the archive at /opt/hex-archive/hex.ez; a plain elixir image does
