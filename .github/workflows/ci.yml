@@ -1,0 +1,50 @@
+name: ci
+
+# Check every push and pull request: vet, test, build.
+#
+# THIS REPOSITORY IS A GO WORKSPACE. There is no root go.mod; go.work `use`s a
+# set of sub-directories, each with its own module. That layout is correct and is
+# not changed here: it lets the command reference the core library and every
+# adapter by path, without publishing intermediate versions to a proxy or
+# threading replace directives through thirty modules.
+#
+# So the toolchain is pinned from go.work, and every step runs at the workspace
+# root where ./... spans all modules.
+#
+# CGO_ENABLED=0 because the binaries run in containers and in guests (bionic,
+# musl), where a dynamically linked build fails with a missing interpreter rather
+# than an obvious error.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CGO_ENABLED: "0"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+          cache: true
+
+      - name: modules in this workspace
+        run: |
+          echo "$(grep -c '^\s*\./' go.work) modules"
+          go work edit -json | head -40
+
+      - run: go vet ./...
+
+      - run: go test ./...
+
+      - run: go build ./...
