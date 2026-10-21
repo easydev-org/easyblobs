@@ -17,10 +17,14 @@ HOST_ADDR=$(printf '%s' "$EASYBLOBS_URL" | sed 's|https\?://||; s|/.*||')
 REGISTRY="${OCI_REGISTRY:-registry-1.docker.io}"
 
 # fetch <path> [extra wget args]: GET through the mirror as if talking to $REGISTRY.
+#
+# The path is captured BEFORE shifting: `"$@"` used to re-expand the path as an
+# extra argument, so wget received it twice and the second copy became the URL.
 fetch() {
+  _path="$1"; shift
   wget -qO- --timeout=60 --tries=1 \
     --header="Host: $REGISTRY" "$@" \
-    "http://$HOST_ADDR$1"
+    "http://$HOST_ADDR$_path"
 }
 
 echo "oci: talking to $REGISTRY through $HOST_ADDR"

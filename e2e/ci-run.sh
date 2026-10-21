@@ -401,7 +401,13 @@ after_bytes=$(data_bytes)
 #          downloaded, so nothing is cached.
 readonly_protocol() {
   case "$1" in
-    swift) return 0 ;;
+    # swift: identifiers/releases are metadata lookups; the client then compiles
+    #        and runs a Swift program against the parsed answer.
+    # nix:   `nix store info --store <mount>` reports on a binary-cache store -
+    #        a metadata query. `nix-instantiate --eval` is pure evaluation. No
+    #        narinfo/nar is downloaded, so nothing is cached, and the suite's
+    #        proof is that every nix command succeeds.
+    swift|nix) return 0 ;;
     *) return 1 ;;
   esac
 }
