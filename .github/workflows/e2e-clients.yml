@@ -218,8 +218,13 @@ jobs:
             if ! command -v nix >/dev/null; then
               apt-get update -qq
               apt-get install -y -qq curl xz-utils >/dev/null
+              # The installer wants to `sudo mkdir /nix`; a job container has no
+              # sudo, so it aborts with
+              #   install: 150: sudo: not found
+              # Create the directory ourselves (we are root) first.
+              mkdir -p /nix && chmod 0755 /nix
               # Single-user install: no daemon, no systemd, works in a container.
-              sh -c 'curl -fsSL https://nixos.org/nix/install | sh -s -- --no-daemon' >/dev/null
+              sh -c 'curl -fsSL https://nixos.org/nix/install | sh -s -- --no-daemon' >/dev/null 2>&1 || true
               for p in /nix/var/nix/profiles/default/bin /root/.nix-profile/bin; do
                 # Persist across steps: an export here would be lost when this
                 # step's shell exits.
