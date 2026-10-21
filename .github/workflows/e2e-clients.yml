@@ -211,7 +211,8 @@ jobs:
               # Create the directory ourselves (we are root) first.
               mkdir -p /nix && chmod 0755 /nix
               # Single-user install: no daemon, no systemd, works in a container.
-              sh -c 'curl -fsSL https://nixos.org/nix/install | sh -s -- --no-daemon' >/dev/null 2>&1 || true
+              echo "installing nix..."
+              sh -c 'curl -fsSL https://nixos.org/nix/install | sh -s -- --no-daemon' 2>&1 | tail -5 || true
               for p in /nix/var/nix/profiles/default/bin /root/.nix-profile/bin; do
                 # Persist across steps: an export here would be lost when this
                 # step's shell exits.
