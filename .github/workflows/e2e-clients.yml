@@ -183,8 +183,9 @@ jobs:
           done
           curl -fsS "http://127.0.0.1:${EASYBLOBS_PORT}/healthz"
           {
-            echo "EASYBLOBS_BASE=http://127.0.0.1:${EASYBLOBS_PORT}/artifacts"
-            echo "EASYBLOBS_URL=http://127.0.0.1:${EASYBLOBS_PORT}"
+            # The ORIGIN only: ci-run.sh derives the per-protocol mount
+            # (including /maven/_upstream/<host> for the maven-family suites).
+            echo "EASYBLOBS_ORIGIN=http://127.0.0.1:${EASYBLOBS_PORT}"
             echo "EASYBLOBS_DATA=/tmp/eb-data"
           } >> "$GITHUB_ENV"
 

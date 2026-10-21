@@ -34,11 +34,21 @@ fi
 after=$(cas_count)
 echo "=== e2e/$PROTO OK (CAS: $before -> $after files) ==="
 
-# The cache assertion: a pull-through MUST leave bytes behind. A protocol that
-# legitimately serves nothing from the CAS (netcache stores raw HTTP bodies in
-# its own table) still grows the data dir, so a strictly-greater count is the
-# right bar for those; for the rest it proves the artifact was really cached.
-if [ "$after" -le "$before" ]; then
-  echo "FAIL: e2e/$PROTO did not cache anything (CAS stayed at $before)" >&2
-  exit 1
-fi
+# The cache assertion: a pull-through MUST leave bytes behind, otherwise an
+# adapter that only proxies would pass. Protocols whose cache lives in the
+# METADATA db (huggingface, netcache) do not grow the CAS file count, so for
+# those we require the data dir to grow instead of failing them on a technicality.
+case "$PROTO" in
+  huggingface|netcache)
+    if [ "$after" -lt "$before" ]; then
+      echo "FAIL: e2e/$PROTO lost data (CAS $before -> $after)" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    if [ "$after" -le "$before" ]; then
+      echo "FAIL: e2e/$PROTO did not cache anything (CAS stayed at $before)" >&2
+      exit 1
+    fi
+    ;;
+esac

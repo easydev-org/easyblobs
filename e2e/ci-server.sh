@@ -38,6 +38,8 @@ until curl -fsS "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; do
   sleep 0.5
 done
 
-echo "export EASYBLOBS_BASE=http://127.0.0.1:$PORT/artifacts"
-echo "export EASYBLOBS_URL=http://127.0.0.1:$PORT"
+# EASYBLOBS_ORIGIN only: ci-run.sh derives the per-protocol mount from it
+# (including /maven/_upstream/<host> for the maven-family suites), so a single
+# value cannot be wrong for some protocol.
+echo "export EASYBLOBS_ORIGIN=http://127.0.0.1:$PORT"
 echo "export EASYBLOBS_DATA=$DATA"
