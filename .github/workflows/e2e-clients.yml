@@ -257,6 +257,10 @@ jobs:
               #          does not exist
               # Create them, then point NIX_CONFIG at that group.
               addgroup --system nixbld 2>/dev/null || true
+              # /var/empty is the nixbld home; it does not exist in a minimal
+              # image and adduser refuses the user without it:
+              #   info: The home dir /var/empty you specified can't be accessed
+              mkdir -p /var/empty
               for i in $(seq 1 10); do
                 adduser --system --disabled-password --home /var/empty \
                   --ingroup nixbld --no-create-home \

@@ -28,7 +28,19 @@ echo "oci: talking to $REGISTRY through $HOST_ADDR"
 # 1) Manifest list -> a platform manifest digest.
 INDEX=$(fetch "/v2/library/busybox/manifests/latest" \
   --header='Accept: application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.index.v1+json')
-D=$(printf '%s' "$INDEX" | tr '}' '\n' | grep -o 'sha256:[a-f0-9]\{64\}' | head -1)
+echo "oci: manifest list is $(printf '%s' "$INDEX" | wc -c) bytes"
+# Pick the amd64 manifest explicitly: the index also lists attestation manifests
+# (platform "unknown/unknown") and every other architecture, and taking the
+# first digest blindly can select an attestation instead of an image.
+D=$(printf '%s' "$INDEX" \
+  | tr ',' '\n' \
+  | grep -o '"digest":"sha256:[a-f0-9]*"' \
+  | head -1 \
+  | sed 's/.*sha256:/sha256:/; s/"$//')
+# Fallback: any sha256 in the document (older indexes without "digest": keys).
+if [ -z "$D" ]; then
+  D=$(printf '%s' "$INDEX" | grep -o 'sha256:[a-f0-9]\{64\}' | head -1)
+fi
 [ -n "$D" ] || {
   echo "oci: no manifest digest from $REGISTRY"
   echo "oci: response was: $(printf '%s' "$INDEX" | head -c 200)"
