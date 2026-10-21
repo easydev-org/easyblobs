@@ -56,4 +56,4 @@ nix	nixos/nix	script runs `nix store info` / `nix-instantiate`
 debian	debian:bookworm	script runs `apt-get` from a [trusted=yes] source
 apk	alpine:3.20	script runs `apk add --allow-untrusted`
 rpm	fedora:41	script runs `dnf install`
-cran	r-base:4.4	script runs `Rscript install.packages`
+cran	rocker/r-ver:4.4	script runs `Rscript install.packages`

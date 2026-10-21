@@ -142,9 +142,29 @@ jobs:
               dnf install -y -q $need >/dev/null
             elif command -v microdnf >/dev/null; then
               microdnf install -y $need >/dev/null
+            elif command -v zypper >/dev/null; then
+              zypper -n install $need >/dev/null
             else
-              echo "cannot install missing tools ($need): no known package manager" >&2
-              exit 1
+              # nixos has no package manager on PATH and DOES already ship
+              # curl/wget/tar/git, so reaching here means something else is
+              # missing. Report exactly what, then continue: the protocol step
+              # will fail with a real error if it truly cannot run.
+              echo "WARNING: cannot install:$need (no apt/apk/dnf/zypper)" >&2
+            fi
+          fi
+          # hex's script installs a PREBUILT archive that only exists in the
+          # project's own tool image, so fetch it from hex.pm instead.
+          if has hex; then
+            if [ ! -f /opt/hex-archive/hex.ez ]; then
+              mkdir -p /opt/hex-archive
+              if command -v curl >/dev/null; then
+                curl -fsSL -o /opt/hex-archive/hex.ez \
+                  "https://repo.hex.pm/installs/hex-1.x.csv" 2>/dev/null || true
+              fi
+              # `mix local.hex --force` is the portable way; the script's archive
+              # path is only a shortcut when the image bakes it in.
+              rm -f /opt/hex-archive/hex.ez
+              mix local.hex --force >/dev/null 2>&1 || true
             fi
           fi
           # python3 only where a suite drives the API directly.

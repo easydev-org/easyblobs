@@ -74,8 +74,20 @@ data_bytes() { du -sb "$EASYBLOBS_DATA" 2>/dev/null | awk '{print $1}' || echo 0
 before=$(cas_count)
 before_bytes=$(data_bytes)
 
+# The upstream the maven-family and npm-family suites expose as an explicit
+# segment is also the HOST that gets cached, so a protocol-specific base is
+# not enough for every suite.
+#
+# Some suites (conan) write into the CURRENT directory as their client's
+# workspace, so run each one from a fresh temp dir: a suite must never inherit
+# fragments from the one before it.
+WORK="$(mktemp -d)"
+# Absolute path to the suite: we cd into WORK (some suites write there).
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$WORK"
+
 echo "=== e2e/$PROTO (base=$EASYBLOBS_BASE, CAS before: $before files) ==="
-if ! sh "e2e/scripts/$PROTO.sh"; then
+if ! sh "$REPO/e2e/scripts/$PROTO.sh"; then
   echo "--- FAILED: e2e/$PROTO ---" >&2
   echo "--- easyblobs log (tail) ---" >&2
   tail -40 /tmp/easyblobs.log >&2 || true
