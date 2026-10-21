@@ -193,7 +193,11 @@ jobs:
               # print their error - silence here produced nothing but
               # 'luarocks: not found' three CI rounds in a row.
               apk add --no-cache lua5.4 lua5.4-dev build-base unzip curl 2>&1 | tail -3 || true
-              if ! apk add --no-cache luarocks 2>&1 | tail -3; then
+              # NOTE: test the INSTALL, not the pipeline. `if ! apk add ... | tail`
+              # negates tail's status, so a failing apk silently looked like
+              # success and the source build never ran.
+              if ! apk add --no-cache luarocks 2>&1 | tail -3; then :; fi
+              if ! command -v luarocks >/dev/null; then
                 echo "luarocks not packaged; building from source"
                 LV=3.11.1
                 curl -fsSL -o /tmp/luarocks.tgz \
@@ -266,8 +270,10 @@ jobs:
                   --ingroup nixbld --no-create-home \
                   --gecos "Nix build user $i" "nixbld$i" 2>/dev/null || true
               done
-              /tmp/nix-${NIX_VER}-x86_64-linux/install --no-daemon --no-modify-profile 2>&1 | tail -5 || \
-                /tmp/nix-${NIX_VER}-x86_64-linux/install --no-daemon 2>&1 | tail -5 || true
+              # Keep the installer's FULL output: the previous "--no-daemon
+              # --no-modify-profile" attempt hid the real reason behind 'tail -5'.
+              /tmp/nix-${NIX_VER}-x86_64-linux/install --no-daemon \
+                --no-channel-add 2>&1 | tail -25 || true
               # Single-user installs still consult build-users-group; make it
               # explicit so nix does not look for a group that may be missing.
               mkdir -p /etc/nix
