@@ -39,6 +39,19 @@ echo "luarocks: manifest $(wc -c < /rocktree/mirror/manifest-5.4) bytes from $EA
 sed -i "s|https://luarocks.org|$EASYBLOBS_BASE|g; s|http://luarocks.org|$EASYBLOBS_BASE|g" \
   /rocktree/mirror/manifest-5.4
 
+# Fetch the ROCK ITSELF through the mount as well. luarocks looks for it next to
+# the manifest (rocks_servers = a local dir), and reported
+#   Could not fetch rock file: File not found: /rocktree/mirror/luafilesystem-1.9.0-1.src.rock
+# The manifest names the file, so read the name from it rather than hard-coding.
+ROCK=$(grep -o 'luafilesystem-[0-9.]*-1\.src\.rock' /rocktree/mirror/manifest-5.4 | head -1)
+[ -n "$ROCK" ] || ROCK=luafilesystem-1.9.0-1.src.rock
+echo "luarocks: fetching $ROCK from the mount"
+if wget -q -O "/rocktree/mirror/$ROCK" "$EASYBLOBS_BASE/$ROCK"; then
+  echo "luarocks: $ROCK $(wc -c < /rocktree/mirror/$ROCK) bytes from the mount"
+else
+  echo "luarocks: the mount does not serve $ROCK"
+fi
+
 mkdir -p /root/.luarocks
 printf '%s\n' \
   'rocks_servers = { "/rocktree/mirror" }' \
