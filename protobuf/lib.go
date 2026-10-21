@@ -69,9 +69,13 @@ const maxBSRBody = 1 << 20
 // The whole path after the mount is the fully-qualified service + method, which
 // is exactly the upstream path (methods live at the host root).
 func (s *State) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		// Connect unary calls are POSTs; anything else is not a BSR method.
-		w.Header().Set("Allow", "POST")
+	// Connect unary calls are POSTs, but the BSR also exposes plain GET methods
+	// (DownloadService/Download is the documented way to fetch a module's files
+	// and is a GET with query parameters). Rejecting everything but POST made
+	// that entire surface unusable through this mount: the upstream answers the
+	// GET with 200 + the module archive, while the mount answered 405.
+	if r.Method != http.MethodPost && r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET, POST")
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
@@ -86,8 +90,8 @@ func (s *State) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		easyblobkit.Error(w, http.StatusBadRequest, "read body: "+err.Error())
 		return
 	}
-	// The response depends on the service+method AND the request body.
-	cacheKey := path + "?" + hashHex(body)
+	// The response depends on the service+method, the query string AND the body.
+	cacheKey := path + "?" + r.URL.RawQuery + "&" + hashHex(body)
 	if art, gerr := s.Registry.Meta.Get(r.Context(), "protobuf", path, cacheKey); gerr == nil && len(art.Blobs) > 0 {
 		if easyblobkit.ServeBlobAt(w, r, s.Registry.Blobs, r.Context(), art.Blobs[0].Digest, "application/json") {
 			return
@@ -113,7 +117,12 @@ func (s *State) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if accept == "" {
 		accept = "application/json"
 	}
-	resp, err := up.Do(r.Context(), http.MethodPost, "/"+path, bytes.NewReader(body), "application/json", accept)
+	upPath := "/" + path
+	if q := r.URL.RawQuery; q != "" {
+		upPath += "?" + q
+	}
+	// Forward the caller's method: GET for Download, POST for Connect unary.
+	resp, err := up.Do(r.Context(), r.Method, upPath, bytes.NewReader(body), "application/json", accept)
 	if err != nil {
 		easyblobkit.Error(w, http.StatusBadGateway, "upstream fetch: "+err.Error())
 		return

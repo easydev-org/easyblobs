@@ -109,14 +109,21 @@ func TestConfiguredTokenWhenCallerHasNone(t *testing.T) {
 	}
 }
 
-// TestMethodNotAllowed: only POST (Connect unary) is proxied.
+// TestMethodNotAllowed: PUT/DELETE are not BSR methods.
+//
+// GET is deliberately NOT rejected: the BSR exposes plain GET methods
+// (DownloadService/Download takes query parameters and returns the module
+// archive), and refusing GET made that whole surface unreachable through the
+// mount while the upstream answered it with 200.
 func TestMethodNotAllowed(t *testing.T) {
 	s := newFixture(t, "http://127.0.0.1:1")
-	req := httptest.NewRequest(http.MethodGet, "/artifacts/protobuf/svc/M", nil)
-	rec := httptest.NewRecorder()
-	s.ServeHTTP(rec, req)
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("GET = %d, want 405", rec.Code)
+	for _, m := range []string{http.MethodPut, http.MethodDelete, http.MethodPatch} {
+		req := httptest.NewRequest(m, "/artifacts/protobuf/svc/M", nil)
+		rec := httptest.NewRecorder()
+		s.ServeHTTP(rec, req)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("%s = %d, want 405", m, rec.Code)
+		}
 	}
 }
 
