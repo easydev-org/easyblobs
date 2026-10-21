@@ -60,10 +60,23 @@ jobs:
           set -eu
           go build -o easyblobs-bin ./cmd
           ls -lh easyblobs-bin
+          # Build the egress-blocking proxy HERE, on the Go toolchain, because
+          # most driver images (helm, maven, ruby, debian, ...) have no Go at
+          # all - building it inside them failed with a bare 'go: not found'.
+          rm -rf /tmp/aproxy && mkdir -p /tmp/aproxy
+          cp e2e/allowlist-proxy/main.go /tmp/aproxy/main.go
+          ( cd /tmp/aproxy \
+            && go mod init allowlistproxy >/dev/null \
+            && GOWORK=off GO111MODULE=on CGO_ENABLED=0 \
+                 go build -o allowlist-proxy . )
+          cp /tmp/aproxy/allowlist-proxy allowlist-proxy-bin
+          ls -lh allowlist-proxy-bin
       - uses: actions/upload-artifact@v4
         with:
-          name: easyblobs-bin
-          path: easyblobs-bin
+          name: easyblobs-bins
+          path: |
+            easyblobs-bin
+            allowlist-proxy-bin
           retention-days: 1
 
   # ---------------------------------------------------------------------------
@@ -106,7 +119,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: easyblobs-bin
+          name: easyblobs-bins
           path: /tmp/bin
 
       - name: toolchain sanity
@@ -233,43 +246,18 @@ jobs:
       - name: start the allowlist proxy (mount only, no egress)
         run: |
           set -eu
-          # Build with an EXPLICIT, verbose command so a failure is visible
-          # instead of a silent '##[endgroup] -> exit 1':
-          #   - GOWORK=off: this helper is not part of the repo's go.work
-          #   - GOFLAGS=-mod=mod, no external modules (stdlib only)
-          echo "building the allowlist proxy"
-          # Create the module here rather than committing a go.mod: a committed
-          # one pins a go version the runner may not have, and `Go 1.27.2` in a
-          # go.mod makes go 1.26 fail with a toolchain error that the harness
-          # then reports as a silent exit 1.
-          #
-          # GOCACHE/GOMODCACHE/HOME: the job container's default HOME may be
-          # root-owned or read-only for the runner user, and a build cache that
-          # cannot be created makes `go build` fail with no message.
-          export HOME=/tmp/ghome
-          export GOCACHE=/tmp/gocache
-          export GOMODCACHE=/tmp/gomodcache
-          export GOPATH=/tmp/gopath
-          mkdir -p "$HOME" "$GOCACHE" "$GOMODCACHE" "$GOPATH"
-          # NOTE: no line continuations here. A multi-line subshell with `\`
-          # silently stopped after `go mod init` in the container's shell, so
-          # `go build` never ran and the step died with no message.
-          set -x
-          rm -rf /tmp/aproxy
-          mkdir -p /tmp/aproxy
-          cp e2e/allowlist-proxy/main.go /tmp/aproxy/main.go
-          cd /tmp/aproxy
-          go mod init allowlistproxy
-          GOWORK=off GO111MODULE=on go build -o /tmp/allowlist-proxy .
-          set +x
-          test -x /tmp/allowlist-proxy || { echo "FATAL: proxy did not build"; ls -la /tmp/aproxy; exit 1; }
-          echo "build ok"
+          # The proxy is BUILT in the `server` job and shipped as an artifact:
+          # most driver images (helm, maven, ruby, debian, ...) have no Go, so
+          # building it here failed with 'go: not found'.
+          chmod +x /tmp/bin/allowlist-proxy-bin
+          /tmp/bin/allowlist-proxy-bin --help >/dev/null 2>&1 || true
+          echo "proxy binary present: $(ls -l /tmp/bin/allowlist-proxy-bin)"
 
           # Start detached. `nohup ... &` alone let the step return while the
           # runner then killed the process group, so the proxy was gone by the
           # time a client needed it (which looked like an unrelated failure).
           setsid env ALLOWED_HOST="127.0.0.1:${EASYBLOBS_PORT}" LISTEN="127.0.0.1:8888" \
-            /tmp/allowlist-proxy >/tmp/allowlist-proxy.log 2>&1 < /dev/null &
+            /tmp/bin/allowlist-proxy-bin >/tmp/allowlist-proxy.log 2>&1 < /dev/null &
           PROXY_PID=$!
           echo "proxy pid=$PROXY_PID"
           i=0
