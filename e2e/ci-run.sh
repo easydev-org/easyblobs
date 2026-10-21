@@ -225,11 +225,21 @@ X
         # the network zero times - which is exactly what happened (easyblobs saw
         # no requests and the data dir did not grow). Purge everything composer
         # could reuse before the run.
-        rm -rf "${COMPOSER_HOME:-/tmp/composer}"/* 2>/dev/null || true
         export COMPOSER_HOME=/tmp/composer-home
         export COMPOSER_CACHE_DIR=/tmp/composer-cache
         mkdir -p "$COMPOSER_HOME" "$COMPOSER_CACHE_DIR"
-        find / -maxdepth 6 -type d -name 'cache-files-*' 2>/dev/null | while read -r d; do rm -rf "$d"; done || true
+        # NOTE: never sweep the whole filesystem for cache dirs - an earlier
+        # version did `find / -maxdepth 6 -name 'cache-files-*' | rm -rf`, which
+        # also removed the server's data dir (the log showed
+        # 'data 73728 -> 0 bytes'). Only touch composer's own two directories,
+        # and never anything under EASYBLOBS_DATA.
+        for d in "$HOME/.composer" "$HOME/.cache/composer" /tmp/composer-home /tmp/composer-cache; do
+          case "$d" in
+            "$EASYBLOBS_DATA"*|"$EASYBLOBS_DATA") continue ;;
+          esac
+          rm -rf "$d" 2>/dev/null || true
+        done
+        mkdir -p "$COMPOSER_HOME" "$COMPOSER_CACHE_DIR"
         export COMPOSER_NO_INTERACTION=1
         d="$(mktemp -d)"
         cd "$d"
@@ -353,6 +363,12 @@ cached=0
 [ "$after_bytes" -gt "$before_bytes" ] && cached=1
 if [ "$cached" -ne 1 ]; then
   echo "FAIL: e2e/$PROTO cached nothing (CAS $before->$after files, data $before_bytes->$after_bytes bytes)" >&2
+  # A SHRINKING data dir means something deleted the server's storage - a bug
+  # in the harness, not in the protocol. Say so plainly.
+  if [ "$after_bytes" -lt "$before_bytes" ]; then
+    echo "      NOTE: the data dir SHRANK ($before_bytes -> $after_bytes)." >&2
+    echo "      That is a harness bug (something deleted $EASYBLOBS_DATA), not a protocol failure." >&2
+  fi
   # The two usual causes, named so the next reader does not have to guess:
   #   - the client never connected (wrong source/mirror config), or
   #   - it connected somewhere else (a proxy / a hardcoded upstream).
