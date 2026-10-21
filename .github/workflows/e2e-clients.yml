@@ -334,11 +334,15 @@ jobs:
             --data /tmp/eb-data --self-base "http://127.0.0.1:${EASYBLOBS_PORT}" \
             >/tmp/easyblobs.log 2>&1 &
           i=0
-          until curl -fsS "http://127.0.0.1:${EASYBLOBS_PORT}/healthz" >/dev/null 2>&1; do
+          # --noproxy: the readiness probe must NOT go through the egress proxy,
+          # which only allows listed upstreams. (The proxy vars above are set
+          # for the SERVER process only; curl would otherwise inherit nothing,
+          # but being explicit keeps this correct if the step's env changes.)
+          until curl -fsS --noproxy '*' "http://127.0.0.1:${EASYBLOBS_PORT}/healthz" >/dev/null 2>&1; do
             i=$((i+1)); [ "$i" -gt 120 ] && { cat /tmp/easyblobs.log; exit 1; }
             sleep 0.5
           done
-          curl -fsS "http://127.0.0.1:${EASYBLOBS_PORT}/healthz"
+          curl -fsS --noproxy '*' "http://127.0.0.1:${EASYBLOBS_PORT}/healthz"
 
       # The runner HAS outbound network, and package managers use it even when
       # told to use a mirror - which is how rubygems/composer "passed" while
