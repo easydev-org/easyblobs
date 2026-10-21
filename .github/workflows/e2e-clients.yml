@@ -279,18 +279,22 @@ jobs:
             sleep 0.5
           done
           echo "  via proxy, mount        -> 200"
-          # NOTE: `curl ... || echo 000` DOUBLES the code when curl prints
-          # '000' and then exits non-zero - the result was "000000", which then
-          # failed my own case match and aborted every driver. Capture the exit
-          # status separately instead of concatenating.
-          denied=$(curl -sS -o /dev/null -w '%{http_code}' \
+          # Egress check. Two pitfalls already burned a round each:
+          #   - `curl ... || echo 000` concatenates to '000000' when curl both
+          #     prints 000 and exits non-zero;
+          #   - without --max-time the CONNECT attempt hangs and the whole step
+          #     stops with no further output.
+          set +e
+          denied=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
             -x http://127.0.0.1:8888 "https://rubygems.org/" 2>/dev/null)
           rc=$?
-          echo "  via proxy, rubygems.org -> http=$denied rc=$rc (blocked means rc!=0 or http=403)"
+          set -e
+          echo "  via proxy, rubygems.org -> http=${denied:-none} rc=$rc"
           if [ "$rc" -eq 0 ] && [ "$denied" != "403" ]; then
             echo "FATAL: the proxy is not blocking egress (http=$denied)" >&2
             exit 1
           fi
+          echo "  egress is blocked; the mount is the only reachable registry"
           {
             # The ORIGIN only: ci-run.sh derives the per-protocol mount
             # (including /maven/_upstream/<host> for the maven-family suites).
