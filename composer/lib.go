@@ -159,7 +159,14 @@ func (s *State) p2(w http.ResponseWriter, r *http.Request, rest string) {
 		remote, err := s.Registry.Remote(r.Context(), easyblobkit.UpstreamSpec{Format: "composer"})
 		if err == nil {
 			if body, err := remote.GetCached(r.Context(), easyblobkit.SharedIndexCache(), "/p2/"+easyblobkit.URLencode(full)+".json"); err == nil {
-				easyblobkit.JSON(w, http.StatusOK, json.RawMessage(body))
+				// REWRITE the upstream metadata before returning it. Packagist
+				// points dist.url at api.github.com/.../zipball/..., so a client
+				// resolving through this mirror would still download the archive
+				// from GitHub - bypassing the mirror entirely (and failing in
+				// any egress-restricted deployment). The bytes are already
+				// served at /dist/<name>/<version>/<version>.zip, so point the
+				// metadata there.
+				easyblobkit.JSON(w, http.StatusOK, json.RawMessage(s.rewriteDist(full, []byte(body))))
 				return
 			}
 		}
@@ -198,6 +205,59 @@ func normalizeVersion(v string) string {
 		parts = append(parts, "0")
 	}
 	return strings.Join(parts, ".")
+}
+
+// rewriteDist points every dist.url in an UPSTREAM packument at this mirror.
+//
+// Why this is required and not cosmetic: Packagist's dist.url is
+// https://api.github.com/repos/<owner>/<repo>/zipball/<sha>. A client that
+// resolves through the mirror but downloads from that URL never touches the
+// mirror for the actual bytes - so an air-gapped or egress-restricted install
+// fails, and a "mirror" that only serves metadata is not a mirror. The archive
+// is served by this adapter at /dist/<name>/<version>/<version>.zip (see
+// versionEntry), so the metadata must advertise that instead.
+//
+// Already-local versions are unaffected: p2 only calls this for packages that
+// have no locally stored version yet.
+// rewriteDist takes the upstream JSON (from GetCached, which is a string) and
+// returns it with every dist.url pointed at this mirror.
+func (s *State) rewriteDist(full string, body []byte) []byte {
+	var doc map[string]any
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return body // not JSON we understand: pass it through untouched
+	}
+	pkgs, _ := doc["packages"].(map[string]any)
+	list, _ := pkgs[full].([]any)
+	if len(list) == 0 {
+		return body
+	}
+	base := s.base()
+	changed := false
+	for _, item := range list {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		version, _ := entry["version"].(string)
+		if version == "" {
+			continue
+		}
+		dist, _ := entry["dist"].(map[string]any)
+		if dist == nil {
+			dist = map[string]any{"type": "zip"}
+			entry["dist"] = dist
+		}
+		dist["url"] = base + "/dist/" + full + "/" + easyblobkit.URLencode(version) + "/" + version + ".zip"
+		changed = true
+	}
+	if !changed {
+		return body
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return body
+	}
+	return out
 }
 
 func (s *State) provider(w http.ResponseWriter, r *http.Request, rest string) {
