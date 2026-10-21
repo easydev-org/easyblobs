@@ -78,7 +78,7 @@ cran	rocker/r-ver:4.4	script runs `Rscript install.packages`
 #   swift     needs a Swift toolchain; the official swift image has swiftc.
 oci	ubuntu:24.04	script speaks the /v2 protocol with wget (needs EASYBLOBS_URL)
 luarocks	alpine:3.20	script runs `luarocks` (apk-installed in the job)
-nix	nixos/nix	official Nix image; nix is preinstalled
+nix	ubuntu:24.04	official Nix tarball unpacked in the job (nixos/nix breaks Actions)
 gitlfs	alpine:3.20	script drives the LFS object protocol with git + git-lfs
 swift	swift:6.0	official Swift image ships swiftc
 

@@ -180,11 +180,18 @@ jobs:
             # alpine has luarocks as a package; debian-family images too. Install
             # with whichever package manager this image has.
             if command -v apk >/dev/null; then
-              apk add --no-cache luarocks lua5.4 >/dev/null
+              # NOT silenced: alpine has both `lua5.4` and `luarocks`, and the
+              # package set has to be consistent (luarocks pulls a specific lua
+              # version). A silent failure here showed up later as the useless
+              # message 'luarocks: not found'.
+              # build-base + the lua headers: luafilesystem is a C extension, so
+              # luarocks must be able to compile it.
+              apk add --no-cache luarocks lua5.4 lua5.4-dev build-base 2>&1 | tail -10 || true
             elif command -v apt-get >/dev/null; then
               apt-get update -qq && apt-get install -y -qq luarocks lua5.4 >/dev/null
             fi
             command -v luarocks >/dev/null && echo "luarocks: $(luarocks --version 2>&1 | head -1)"
+            command -v luarocks >/dev/null || echo "WARNING: luarocks did not install"
           fi
           if has gitlfs; then
             if command -v apk >/dev/null; then
@@ -211,26 +218,35 @@ jobs:
             fi
           fi
           if has nix; then
-            # The `nixos/nix` image ships nix already, so nothing to install.
-            # (It is used ONLY as the job container for the nix protocol; the
-            # runner-visible PATH problem that broke other steps is handled by
-            # invoking the action steps with an explicit shell.)
+            # `nixos/nix` cannot be an Actions job container: its image sets
+            #   PATH=/root/.nix-profile/bin:/nix/var/nix/profiles/default/bin:...
+            # with no /usr/bin at all, so every action dies with
+            #   exec /__e/node24/bin/node: no such file or directory
+            # before a step runs.
+            #
+            # So nix is unpacked here instead: the official static tarball gives
+            # a working `nix` without the installer (which needs sudo) and
+            # without touching PATH globally.
             if ! command -v nix >/dev/null; then
-              # Fallback for images that do not ship it.
-              for p in /nix/var/nix/profiles/default/bin /root/.nix-profile/bin; do
-                [ -d "$p" ] && echo "$p" >> "$GITHUB_PATH"
-              done
-            fi
-            if ! command -v nix >/dev/null && command -v apt-get >/dev/null; then
               apt-get update -qq
               apt-get install -y -qq curl xz-utils >/dev/null
-              mkdir -p /nix && chmod 0755 /nix
-              sh -c 'curl -fsSL https://nixos.org/nix/install | sh -s -- --no-daemon' 2>&1 | tail -5 || true
+              mkdir -p /nix
+              NIX_VER=2.24.10
+              curl -fsSL -o /tmp/nix.tar.xz \
+                "https://releases.nixos.org/nix/nix-${NIX_VER}/nix-${NIX_VER}-x86_64-linux.tar.xz"
+              tar -xJf /tmp/nix.tar.xz -C /tmp
+              # The tarball's own installer needs sudo; unpack the store by hand.
+              /tmp/nix-${NIX_VER}-x86_64-linux/install --no-daemon --no-modify-profile 2>&1 | tail -5 || \
+                /tmp/nix-${NIX_VER}-x86_64-linux/install --no-daemon 2>&1 | tail -5 || true
+              for p in /nix/var/nix/profiles/default/bin /root/.nix-profile/bin; do
+                [ -d "$p" ] && echo "$p" >> "$GITHUB_PATH"
+                [ -d "$p" ] && ln -sf "$p/nix" /usr/local/bin/nix 2>/dev/null || true
+              done
             fi
             if command -v nix >/dev/null; then
               echo "nix: $(nix --version)"
             else
-              echo "WARNING: nix not available in this driver"
+              echo "WARNING: nix not available; the suite will report the reason"
             fi
           fi
           echo "installed; tool checks:"
