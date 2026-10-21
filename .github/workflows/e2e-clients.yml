@@ -229,7 +229,12 @@ jobs:
           set -eu
           chmod +x /tmp/bin/easyblobs-bin
           mkdir -p /tmp/eb-data
-          /tmp/bin/easyblobs-bin --listen "0.0.0.0:${EASYBLOBS_PORT}" \
+          # EASYBLOBS_DEBUG makes the server log every request
+          # ("req GET /artifacts/..."). ci-run.sh uses that count to tell
+          # "the client never reached the mount" apart from "the mount answered
+          # but stored nothing" - without the flag the count is always 0 and
+          # every protocol would look like a bypass.
+          EASYBLOBS_DEBUG=1 /tmp/bin/easyblobs-bin --listen "0.0.0.0:${EASYBLOBS_PORT}" \
             --data /tmp/eb-data --self-base "http://127.0.0.1:${EASYBLOBS_PORT}" \
             >/tmp/easyblobs.log 2>&1 &
           i=0

@@ -276,11 +276,11 @@ X
         rm -rf vendor
         composer update --no-interaction --no-progress --no-cache
         echo "requests seen by the mount (composer):"
-        grep -c 'req .* /artifacts/composer' /tmp/easyblobs.log 2>/dev/null | tail -1 || true
+        grep -c 'req GET /artifacts/composer' /tmp/easyblobs.log 2>/dev/null | tail -1 || true
         # Fail here with a precise message rather than at the generic cache
         # assertion: "composer never asked the mount" is a different bug from
         # "the mount answered but nothing was stored".
-        cn=$(grep -c 'req .* /artifacts/composer' /tmp/easyblobs.log 2>/dev/null)
+        cn=$(grep -c 'req GET /artifacts/composer' /tmp/easyblobs.log 2>/dev/null)
         [ -n "$cn" ] || cn=0
         if [ "$cn" -eq 0 ]; then
           echo "FAIL: composer completed without ever requesting the mount" >&2
@@ -410,7 +410,7 @@ if [ "$cached" -ne 1 ]; then
   # NOTE: `grep -c ... || echo 0` yields "0\n0" when grep finds nothing (it
   # prints 0 AND exits 1), which then breaks the numeric test below. Use a
   # plain command substitution and default it separately.
-  n=$(grep -c "req .* /artifacts/" /tmp/easyblobs.log 2>/dev/null)
+  n=$(grep -c "req GET /artifacts/" /tmp/easyblobs.log 2>/dev/null)
   [ -n "$n" ] || n=0
   echo "      easyblobs saw $n request(s) in total." >&2
   if [ "$n" -eq 0 ]; then
