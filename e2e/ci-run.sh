@@ -220,10 +220,16 @@ X
       # explicit composer.json that names the mount as the ONLY repository, so
       # packagist cannot be used as a fallback.
       if command -v composer >/dev/null; then
-        # A warm image cache would satisfy the install without any fetch; drop
-        # it so the only place left to get the package is the mount.
-        rm -rf "${COMPOSER_HOME:-$HOME/.composer}/cache" "${COMPOSER_HOME:-$HOME/.composer}/cache-files" 2>/dev/null || true
-        export COMPOSER_CACHE_DIR="$(mktemp -d)"
+        # The composer image ships a WARM cache. With a warm cache `composer
+        # require` prints "Installing dependencies from lock file" and touches
+        # the network zero times - which is exactly what happened (easyblobs saw
+        # no requests and the data dir did not grow). Purge everything composer
+        # could reuse before the run.
+        rm -rf "${COMPOSER_HOME:-/tmp/composer}"/* 2>/dev/null || true
+        export COMPOSER_HOME=/tmp/composer-home
+        export COMPOSER_CACHE_DIR=/tmp/composer-cache
+        mkdir -p "$COMPOSER_HOME" "$COMPOSER_CACHE_DIR"
+        find / -maxdepth 6 -type d -name 'cache-files-*' 2>/dev/null | while read -r d; do rm -rf "$d"; done || true
         export COMPOSER_NO_INTERACTION=1
         d="$(mktemp -d)"
         cd "$d"
@@ -259,6 +265,30 @@ X
         find "$CONAN_HOME" -maxdepth 6 -type d -name 'zlib' | head -1 | grep -q . || exit 1
         echo "conan: recipe present in the client cache"
         return 0
+      fi
+      ;;
+    hex)
+      # `mix local.hex` downloads hex ITSELF from HEX_MIRROR/installs/hex-1.x.csv,
+      # and this adapter has no /installs route (its routes are names, versions,
+      # packages/*, tarballs/*), so with the mirror set that call 502s and hex
+      # cannot be installed at all.
+      #
+      # Installing the hex TOOL is not what this suite tests - the point is
+      # that a DEPENDENCY is fetched through the mount. So install hex with the
+      # mirror temporarily unset, then let the suite set HEX_MIRROR for the
+      # dependency resolution.
+      if command -v mix >/dev/null; then
+        if [ -f /opt/hex-archive/hex.ez ]; then
+          mix archive.install /opt/hex-archive/hex.ez --force >/dev/null || true
+        else
+          (
+            set +e
+            unset HEX_MIRROR
+            mix local.hex --force >/dev/null 2>&1
+            mix local.rebar --force >/dev/null 2>&1
+          )
+        fi
+        echo "(hex tool installed OUTSIDE the mirror window)"
       fi
       ;;
   esac
