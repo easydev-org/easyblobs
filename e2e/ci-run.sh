@@ -110,6 +110,68 @@ prep_client() {
         return 0
       fi
       ;;
+    pypi)
+      # The python image already has six (pip says "Requirement already
+      # satisfied"), so the stock suite fetched nothing. Use a wheel the image
+      # does NOT bundle.
+      if command -v pip >/dev/null; then
+        pip install --no-cache-dir --disable-pip-version-check \
+          --index-url "$EASYBLOBS_BASE/simple/" tabulate
+        python3 -c 'import tabulate; print("pypi + tabulate:", tabulate.__version__)'
+        return 0
+      fi
+      ;;
+    nuget)
+      # 'All projects are up-to-date for restore' means the SDK image already
+      # cached the package set, so nothing was downloaded. Clear the global
+      # cache and restore a package the SDK does not ship.
+      if command -v dotnet >/dev/null; then
+        dotnet nuget locals all --clear >/dev/null 2>&1 || true
+        d="$(mktemp -d)"
+        cd "$d"
+        cat > nuget.config <<X
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources>
+    <clear />
+    <add key="easy-platform" value="$EASYBLOBS_BASE/v3/index.json" allowInsecureConnections="true" />
+  </packageSources>
+</configuration>
+X
+        dotnet new console -o app --force >/dev/null
+        ( cd app && dotnet add package Newtonsoft.Json --version 13.0.3 >/dev/null && dotnet restore )
+        return 0
+      fi
+      ;;
+    composer)
+      # The composer image ships an empty global cache, but composer's own
+      # metadata cache may short-circuit the second run. Clear it and add a
+      # package the suite does not use.
+      if command -v composer >/dev/null; then
+        composer config -g secure-http false >/dev/null 2>&1 || true
+        composer config -g repos.packagist composer "$EASYBLOBS_BASE/" >/dev/null 2>&1 || true
+        d="$(mktemp -d)"
+        cd "$d"
+        composer require --no-interaction --no-progress psr/container >/dev/null
+        php -r 'require "vendor/autoload.php"; echo "composer + psr/container: ", interface_exists("Psr\\Container\\ContainerInterface") ? "ok" : "missing", "\n";'
+        return 0
+      fi
+      ;;
+    conan)
+      # `conan download` really pulled the recipe (the log shows the revision),
+      # but `conan inspect` then needs a Conanfile in the CWD. Serve the
+      # assertion from the client cache instead, which is what proves the pull.
+      if command -v conan >/dev/null; then
+        export CONAN_HOME="${CONAN_HOME:-$HOME/.conan2}"
+        conan profile detect --force >/dev/null 2>&1 || true
+        conan remote add easy-platform "$EASYBLOBS_BASE" --force >/dev/null 2>&1 || true
+        conan download zlib/1.3.1 -r easy-platform --only-recipe
+        # The recipe dir must now exist in the local cache: that IS the pull.
+        find "$CONAN_HOME" -maxdepth 6 -type d -name 'zlib' | head -1 | grep -q . || exit 1
+        echo "conan: recipe present in the client cache"
+        return 0
+      fi
+      ;;
   esac
   return 1
 }
