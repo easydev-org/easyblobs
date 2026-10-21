@@ -47,9 +47,17 @@ jobs:
       # command in the `system` module fails until it exists:
       #   system/ui.go:15:12: pattern all:ui/dist: no matching files found
       - name: build the embedded SPA
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          git clone --depth 1 --branch main \
+          # Pin the UI to its newest RELEASE, not to main. A branch tip is
+          # not reproducible: this build would embed whatever happened to be
+          # pushed, with nothing recording which commit it was.
+          u=$(gh release view --repo easydev-org/easyblobs-webui --json tagName -q .tagName) \
+            || { echo "::error::easydev-org/easyblobs-webui has no Release to pin to"; exit 1; }
+          echo "ui=easydev-org/easyblobs-webui@$u"
+          git clone --depth 1 --branch "$u" \
             https://github.com/easydev-org/easyblobs-webui.git /tmp/webui
           cd /tmp/webui
           npm ci --no-audit --no-fund
