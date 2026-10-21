@@ -186,7 +186,23 @@ jobs:
               # message 'luarocks: not found'.
               # build-base + the lua headers: luafilesystem is a C extension, so
               # luarocks must be able to compile it.
-              apk add --no-cache luarocks lua5.4 lua5.4-dev build-base 2>&1 | tail -10 || true
+              #
+              # Released alpine repositories do NOT carry a `luarocks` package
+              # (it lives in community/testing), so try the plain package first
+              # and fall back to building it from source if absent. Both attempts
+              # print their error - silence here produced nothing but
+              # 'luarocks: not found' three CI rounds in a row.
+              apk add --no-cache lua5.4 lua5.4-dev build-base unzip curl 2>&1 | tail -3 || true
+              if ! apk add --no-cache luarocks 2>&1 | tail -3; then
+                echo "luarocks not packaged; building from source"
+                LV=3.11.1
+                curl -fsSL -o /tmp/luarocks.tgz \
+                  "https://luarocks.org/releases/luarocks-${LV}.tar.gz"
+                tar -xzf /tmp/luarocks.tgz -C /tmp
+                ( cd /tmp/luarocks-${LV} \
+                  && ./configure --with-lua-include=/usr/include/lua5.4 \
+                  && make >/dev/null && make install >/dev/null )
+              fi
             elif command -v apt-get >/dev/null; then
               apt-get update -qq && apt-get install -y -qq luarocks lua5.4 >/dev/null
             fi
@@ -235,9 +251,25 @@ jobs:
               curl -fsSL -o /tmp/nix.tar.xz \
                 "https://releases.nixos.org/nix/nix-${NIX_VER}/nix-${NIX_VER}-x86_64-linux.tar.xz"
               tar -xJf /tmp/nix.tar.xz -C /tmp
-              # The tarball's own installer needs sudo; unpack the store by hand.
+              # The Nix daemon model needs the `nixbld` build-users group, and a
+              # fresh container has neither the group nor its users:
+              #   error: the group 'nixbld' specified in 'build-users-group'
+              #          does not exist
+              # Create them, then point NIX_CONFIG at that group.
+              addgroup --system nixbld 2>/dev/null || true
+              for i in $(seq 1 10); do
+                adduser --system --disabled-password --home /var/empty \
+                  --ingroup nixbld --no-create-home \
+                  --gecos "Nix build user $i" "nixbld$i" 2>/dev/null || true
+              done
               /tmp/nix-${NIX_VER}-x86_64-linux/install --no-daemon --no-modify-profile 2>&1 | tail -5 || \
                 /tmp/nix-${NIX_VER}-x86_64-linux/install --no-daemon 2>&1 | tail -5 || true
+              # Single-user installs still consult build-users-group; make it
+              # explicit so nix does not look for a group that may be missing.
+              mkdir -p /etc/nix
+              if ! grep -qs build-users-group /etc/nix/nix.conf; then
+                echo "build-users-group = nixbld" >> /etc/nix/nix.conf
+              fi
               for p in /nix/var/nix/profiles/default/bin /root/.nix-profile/bin; do
                 [ -d "$p" ] && echo "$p" >> "$GITHUB_PATH"
                 [ -d "$p" ] && ln -sf "$p/nix" /usr/local/bin/nix 2>/dev/null || true
