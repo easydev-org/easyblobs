@@ -242,11 +242,20 @@ jobs:
           # one pins a go version the runner may not have, and `Go 1.27.2` in a
           # go.mod makes go 1.26 fail with a toolchain error that the harness
           # then reports as a silent exit 1.
+          #
+          # GOCACHE/GOMODCACHE/HOME: the job container's default HOME may be
+          # root-owned or read-only for the runner user, and a build cache that
+          # cannot be created makes `go build` fail with no message.
+          export HOME=/tmp/ghome
+          export GOCACHE=/tmp/gocache
+          export GOMODCACHE=/tmp/gomodcache
+          export GOPATH=/tmp/gopath
+          mkdir -p "$HOME" "$GOCACHE" "$GOMODCACHE" "$GOPATH"
           ( cd e2e/allowlist-proxy && \
             rm -f go.mod go.sum && \
-            go mod init allowlistproxy >/dev/null && \
-            GOWORK=off GOFLAGS=-mod=mod CGO_ENABLED=0 \
-              go build -v -o /tmp/allowlist-proxy . ) 2>&1 | tail -20
+            go mod init allowlistproxy && \
+            GOWORK=off GOFLAGS=-mod=mod CGO_ENABLED=0 GO111MODULE=on \
+              go build -o /tmp/allowlist-proxy . ) 2>&1
           test -x /tmp/allowlist-proxy || { echo "FATAL: proxy did not build"; exit 1; }
           echo "build ok: $(ls -l /tmp/allowlist-proxy)"
 
