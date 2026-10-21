@@ -230,8 +230,16 @@ jobs:
                 # step's shell exits.
                 [ -d "$p" ] && echo "$p" >> "$GITHUB_PATH"
               done
+              # GITHUB_PATH only applies to *subsequent* steps, and the nix
+              # installer also needs its own profile sourced for the binaries to
+              # exist. Symlink into /usr/local/bin so every later step - and this
+              # one - finds it without depending on PATH bookkeeping.
+              for b in /nix/var/nix/profiles/default/bin/nix /root/.nix-profile/bin/nix; do
+                [ -x "$b" ] && ln -sf "$b" /usr/local/bin/nix
+              done
+              [ -x /usr/local/bin/nix ] || [ -x /nix/var/nix/profiles/default/bin/nix ] || echo "WARNING: nix binary missing after install"
             fi
-            ls -d /nix/var/nix/profiles/default/bin /root/.nix-profile/bin 2>/dev/null || echo "WARNING: nix not installed"
+            ls -l /usr/local/bin/nix 2>/dev/null || ls -d /nix/var/nix/profiles/default/bin 2>/dev/null || echo "WARNING: nix not installed"
           fi
           echo "installed; tool checks:"
           for t in conan luarocks buf git-lfs; do
@@ -292,7 +300,7 @@ jobs:
           # protocol that the adapter really caches is unaffected: for those the
           # mount is still the only source.
           setsid env \
-            ALLOWED_EGRESS="registry-1.docker.io,production.cloudflare.docker.com,auth.docker.io,luarocks.org,repo.hex.pm,builds.hex.pm,opam.ocaml.org,stackage.org,hackage.haskell.org,raw.githubusercontent.com,dl.fedoraproject.org,mirrors.fedoraproject.org,download.fedoraproject.org,deb.debian.org,security.debian.org,dl-cdn.alpinelinux.org" \
+            ALLOWED_EGRESS="registry-1.docker.io,production.cloudflare.docker.com,auth.docker.io,index.docker.io,luarocks.org,luarocks.io,repo.hex.pm,builds.hex.pm,opam.ocaml.org,stackage.org,hackage.haskell.org,raw.githubusercontent.com,dl.fedoraproject.org,mirrors.fedoraproject.org,download.fedoraproject.org,deb.debian.org,security.debian.org,dl-cdn.alpinelinux.org,buf.build,api.buf.build,proxy.golang.org,sum.golang.org,storage.googleapis.com" \
             ALLOWED_HOST="127.0.0.1:${EASYBLOBS_PORT}" LISTEN="127.0.0.1:8888" \
             /tmp/bin/allowlist-proxy-bin >/tmp/allowlist-proxy.log 2>&1 < /dev/null &
           PROXY_PID=$!
