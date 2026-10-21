@@ -60,23 +60,10 @@ jobs:
           set -eu
           go build -o easyblobs-bin ./cmd
           ls -lh easyblobs-bin
-          # Build the egress-blocking proxy HERE, on the Go toolchain, because
-          # most driver images (helm, maven, ruby, debian, ...) have no Go at
-          # all - building it inside them failed with a bare 'go: not found'.
-          rm -rf /tmp/aproxy && mkdir -p /tmp/aproxy
-          cp e2e/allowlist-proxy/main.go /tmp/aproxy/main.go
-          ( cd /tmp/aproxy \
-            && go mod init allowlistproxy >/dev/null \
-            && GOWORK=off GO111MODULE=on CGO_ENABLED=0 \
-                 go build -o allowlist-proxy . )
-          cp /tmp/aproxy/allowlist-proxy allowlist-proxy-bin
-          ls -lh allowlist-proxy-bin
       - uses: actions/upload-artifact@v4
         with:
-          name: easyblobs-bins
-          path: |
-            easyblobs-bin
-            allowlist-proxy-bin
+          name: easyblobs-bin
+          path: easyblobs-bin
           retention-days: 1
 
   # ---------------------------------------------------------------------------
@@ -255,69 +242,6 @@ jobs:
           go-version-file: go.work
           cache: true
 
-      - name: start the allowlist proxy (mount only, no egress)
-        run: |
-          set -eu
-          # The proxy is BUILT in the `server` job and shipped as an artifact:
-          # most driver images (helm, maven, ruby, debian, ...) have no Go, so
-          # building it here failed with 'go: not found'.
-          chmod +x /tmp/bin/allowlist-proxy-bin
-          /tmp/bin/allowlist-proxy-bin --help >/dev/null 2>&1 || true
-          echo "proxy binary present: $(ls -l /tmp/bin/allowlist-proxy-bin)"
-
-          # Start detached. `nohup ... &` alone let the step return while the
-          # runner then killed the process group, so the proxy was gone by the
-          # time a client needed it (which looked like an unrelated failure).
-          # ALLOWED_EGRESS is the set of origins the SERVER may reach when it has
-          # no local copy yet (it is a client of the real upstreams). It must
-          # cover every upstream the adapters genuinely mirror, otherwise the
-          # server answers 404 in 2ms and the protocol looks broken:
-          #   req GET /artifacts/cargo/index/an/yh/anyhow -> 404 (2ms)
-          # Anything not listed stays blocked, so a package manager still cannot
-          # fetch around the mount - it must go through the server, which then
-          # stores what it fetched.
-          ALLOWED_EGRESS_LIST="api.hex.pm,api.nuget.org,archive.ubuntu.com,auth.docker.io,azuresearch-usnc.nuget.org,bcr.bazel.build,buf.build,cache.nixos.org,cdn-lfs.huggingface.co,center.conan.io,center2.conan.io,charts.helm.sh,codeload.github.com,conda.anaconda.org,cpan.metacpan.org,cran.r-project.org,crates.io,deb.debian.org,dl-cdn.alpinelinux.org,dl.fedoraproject.org,dl.google.com,docker.io,download.fedoraproject.org,elrepo.org,files.pythonhosted.org,gcr.io,ghcr.io,github.com,hackage.haskell.org,hex.pm,huggingface.co,index.crates.io,index.docker.io,index.rubygems.org,jitpack.io,jsr.io,luarocks.org,mcr.microsoft.com,mirror.stream.centos.org,mirrors.fedoraproject.org,npm.jsr.io,npmjs.org,nvcr.io,objects.githubusercontent.com,opam.ocaml.org,packagist.org,pecl.php.net,pkg.julialang.org,plugins.gradle.org,production.cloudflare.docker.com,proxy.golang.org,pub.dev,public.ecr.aws,pypi.org,quay.io,raw.githubusercontent.com,registry-1.docker.io,registry.k8s.io,registry.npmjs.org,repo.anaconda.com,repo.clojars.org,repo.hex.pm,repo.maven.apache.org,repo.packagist.org,repo.scala-sbt.org,repo.spring.io,rubygems.org,scala.jfrog.io,security.debian.org,security.ubuntu.com,stackage.org,static.crates.io,storage.googleapis.com,sum.golang.org,updates.jenkins.io"
-          setsid env \
-            ALLOWED_EGRESS="$ALLOWED_EGRESS_LIST" \
-            ALLOWED_HOST="127.0.0.1:${EASYBLOBS_PORT}" LISTEN="127.0.0.1:8888" \
-            /tmp/bin/allowlist-proxy-bin >/tmp/allowlist-proxy.log 2>&1 < /dev/null &
-          PROXY_PID=$!
-          echo "proxy pid=$PROXY_PID"
-          i=0
-          until curl -sS -o /dev/null -x http://127.0.0.1:8888 \
-                  "http://127.0.0.1:${EASYBLOBS_PORT}/healthz"; do
-            i=$((i+1)); [ "$i" -gt 40 ] && { echo "FATAL: proxy never came up"; cat /tmp/allowlist-proxy.log; exit 1; }
-            sleep 0.5
-          done
-          echo "  via proxy, mount        -> 200"
-          # Egress check. Two pitfalls already burned a round each:
-          #   - `curl ... || echo 000` concatenates to '000000' when curl both
-          #     prints 000 and exits non-zero;
-          #   - without --max-time the CONNECT attempt hangs and the whole step
-          #     stops with no further output.
-          set +e
-          denied=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
-            -x http://127.0.0.1:8888 "https://example.com/" 2>/dev/null)
-          rc=$?
-          set -e
-          # The probe host must be one that is NOT in ALLOWED_EGRESS - the point
-          # is to prove arbitrary egress is denied. Probing rubygems.org was
-          # wrong once its own upstream had to be allowed, and the check then
-          # aborted every driver with "the proxy is not blocking egress".
-          echo "  via proxy, example.com (not allowlisted) -> http=${denied:-none} rc=$rc"
-          if [ "$rc" -eq 0 ] && [ "$denied" != "403" ]; then
-            echo "FATAL: the proxy is not blocking egress (http=$denied)" >&2
-            exit 1
-          fi
-          echo "  egress is blocked; the mount is the only reachable registry"
-          {
-            # The ORIGIN only: ci-run.sh derives the per-protocol mount
-            # (including /maven/_upstream/<host> for the maven-family suites).
-            echo "EASYBLOBS_ORIGIN=http://127.0.0.1:${EASYBLOBS_PORT}"
-            echo "EASYBLOBS_DATA=/tmp/eb-data"
-            echo "EASYBLOBS_ALLOWLIST_PROXY=http://127.0.0.1:8888"
-          } >> "$GITHUB_ENV"
-
       - name: start easyblobs
         run: |
           set -eu
@@ -328,32 +252,22 @@ jobs:
           # "the client never reached the mount" apart from "the mount answered
           # but stored nothing" - without the flag the count is always 0 and
           # every protocol would look like a bypass.
-          #
-          # The SERVER is a client too: it fetches from the real upstream when a
-          # protocol has no local copy yet (OCI manifests, luarocks index, ...).
-          # It must therefore go THROUGH the proxy, exactly like the package
-          # managers - otherwise it tries a direct connection, which the runner
-          # blocks, and every pull sits for two minutes and ends as 404.
-          HTTP_PROXY=http://127.0.0.1:8888 HTTPS_PROXY=http://127.0.0.1:8888 \
-          NO_PROXY="127.0.0.1,localhost" \
           EASYBLOBS_DEBUG=1 /tmp/bin/easyblobs-bin --listen "0.0.0.0:${EASYBLOBS_PORT}" \
             --data /tmp/eb-data --self-base "http://127.0.0.1:${EASYBLOBS_PORT}" \
             >/tmp/easyblobs.log 2>&1 &
           i=0
-          # --noproxy: the readiness probe must NOT go through the egress proxy,
-          # which only allows listed upstreams. (The proxy vars above are set
-          # for the SERVER process only; curl would otherwise inherit nothing,
-          # but being explicit keeps this correct if the step's env changes.)
-          until curl -fsS --noproxy '*' "http://127.0.0.1:${EASYBLOBS_PORT}/healthz" >/dev/null 2>&1; do
+          until curl -fsS "http://127.0.0.1:${EASYBLOBS_PORT}/healthz" >/dev/null 2>&1; do
             i=$((i+1)); [ "$i" -gt 120 ] && { cat /tmp/easyblobs.log; exit 1; }
             sleep 0.5
           done
-          curl -fsS --noproxy '*' "http://127.0.0.1:${EASYBLOBS_PORT}/healthz"
+          curl -fsS "http://127.0.0.1:${EASYBLOBS_PORT}/healthz"
+          {
+            # The ORIGIN only: ci-run.sh derives the per-protocol mount
+            # (including /maven/_upstream/<host> for the maven-family suites).
+            echo "EASYBLOBS_ORIGIN=http://127.0.0.1:${EASYBLOBS_PORT}"
+            echo "EASYBLOBS_DATA=/tmp/eb-data"
+          } >> "$GITHUB_ENV"
 
-      # The runner HAS outbound network, and package managers use it even when
-      # told to use a mirror - which is how rubygems/composer "passed" while
-      # easyblobs saw zero requests. Give the client a proxy that allows ONLY
-      # the mount, so a green result proves the bytes came through easyblobs.
       - name: run the real clients
         run: |
           set -u
@@ -362,7 +276,6 @@ jobs:
           # visible, and echo the environment it needs.
           echo "ORIGIN=${EASYBLOBS_ORIGIN:-unset}"
           echo "DATA=${EASYBLOBS_DATA:-unset}"
-          echo "ALLOWLIST=${EASYBLOBS_ALLOWLIST_PROXY:-unset}"
           fail=""
           for p in ${{ matrix.protocols }}; do
             echo "::group::e2e $p"

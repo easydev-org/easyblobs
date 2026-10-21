@@ -30,69 +30,29 @@ PROTO="${1:?usage: ci-run.sh <protocol>}"
 : "${EASYBLOBS_ORIGIN:?EASYBLOBS_ORIGIN not set}"
 : "${EASYBLOBS_DATA:=/tmp/eb-data}"
 
-# ISOLATION. This is the single most important thing in this harness: if the
-# client can reach the real registry it will, and the test passes without
-# easyblobs being exercised. That is exactly what happened to rubygems and
-# composer: "Successfully installed" while the data dir stayed at the empty-db
-# size of 73728 bytes and easyblobs logged ZERO requests.
-#
-# Blanking the proxy variables is NOT enough on a runner with egress. Instead
-# point the client at the ALLOWLIST PROXY (started by the workflow), which
-# forwards only the mount and refuses everything else - including every
-# CONNECT, so no TLS session to a public registry can be established.
-if [ -n "${EASYBLOBS_ALLOWLIST_PROXY:-}" ]; then
-  export http_proxy="$EASYBLOBS_ALLOWLIST_PROXY"
-  export https_proxy="$EASYBLOBS_ALLOWLIST_PROXY"
-  export HTTP_PROXY="$EASYBLOBS_ALLOWLIST_PROXY"
-  export HTTPS_PROXY="$EASYBLOBS_ALLOWLIST_PROXY"
-  unset all_proxy ALL_PROXY
-  # The mount itself must NEVER go through the proxy (avoids a loop and keeps
-  # the fast path direct); everything else has no choice but the proxy.
-  export NO_PROXY="127.0.0.1,localhost"
-  export no_proxy="$NO_PROXY"
-  echo "(egress restricted to the mount via $EASYBLOBS_ALLOWLIST_PROXY)"
-else
-  # No proxy configured: keep the earlier best-effort blanking, and be loud.
-  unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
-  export NO_PROXY="*"
-  export no_proxy="*"
-  echo "WARNING: no allowlist proxy; a client with direct egress can bypass the mount." >&2
-fi
+# NO PROXIES. The CI environment must run with exactly the network it has; the
+# harness does not inject, wrap or restrict egress. Every *_proxy variable is
+# cleared so a client never inherits one from the runner image, and nothing here
+# sets one.
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
+export NO_PROXY="*"
+export no_proxy="*"
 # A few clients consult their own mirror variables; point them at the mount.
 export GOPROXY="$EASYBLOBS_ORIGIN/artifacts/go"
 export GOSUMDB=off
 
 # ---------------------------------------------------------------- proof -----
-# Before any protocol runs, prove that the mount is reachable AND that the
-# public registry is NOT. If the public registry answers, the client will
-# prefer it and the test proves nothing (that is exactly how rubygems and
-# composer "passed" while easyblobs saw zero requests).
+# The mount must answer before a suite runs; without that every failure looks
+# like a protocol bug.
+#
+# NOTE: never write `$(curl ... || echo 000)`. When curl prints '000' AND exits
+# non-zero the two concatenate into '000000', which then fails an equality test
+# and aborts the step for no reason. Read the exit status on its own line.
 echo "--- connectivity sentinel ---"
 if command -v curl >/dev/null; then
-  # NOTE: never write `$(curl ... || echo 000)`. When curl prints '000' AND
-  # exits non-zero the two concatenate into '000000', which then fails an
-  # equality test and aborts the step for no reason. Read the exit status on
-  # its own line.
   code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "$EASYBLOBS_ORIGIN/healthz" 2>/dev/null)
-  echo "  mount /healthz      -> $code"
+  echo "  mount /healthz -> $code"
   [ "$code" = "200" ] || { echo "FATAL: the mount is not reachable" >&2; exit 1; }
-  # Probing egress is EXPECTED to fail once the allowlist proxy is in place, so
-  # its non-zero exit must not end the script. Under `set -e` it did exactly
-  # that, which silently killed every protocol before its suite ran.
-  set +e
-  # Probe a host that is deliberately NOT allowlisted: the question is whether
-  # the CLIENT can reach arbitrary internet, and every adapter's own upstream is
-  # now allowed *for the server*, so probing one of those would answer the wrong
-  # question.
-  pub=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 https://example.com/ 2>/dev/null)
-  pub_rc=$?
-  set -e
-  echo "  example.com         -> http=${pub:-none} rc=$pub_rc"
-  if [ "$pub_rc" -eq 0 ] && [ "$pub" != "403" ]; then
-    echo "  WARNING: arbitrary egress works from the client; only the allowlist proxy prevents a bypass." >&2
-  else
-    echo "  egress blocked (as intended)"
-  fi
 fi
 
 # proto_mount mirrors e2e/run.sh: the /artifacts/<x> a protocol lives under.
@@ -366,13 +326,10 @@ X
       ;;
     huggingface)
       # The suite starts with `pip install huggingface_hub`, i.e. it installs
-      # its CLIENT from PyPI. The allowlist proxy blocks PyPI by design, so that
-      # install must happen OUTSIDE the measured window: do it here with egress
-      # open, then run the suite with the mount as the only reachable registry.
+      # its CLIENT from PyPI. Do that here, before the suite runs, so the
+      # measured window only contains the dependency fetch through the mount.
       if command -v pip >/dev/null; then
-        prep_open_egress
         pip install --no-cache-dir --disable-pip-version-check --quiet huggingface_hub >/dev/null 2>&1
-        prep_restore_egress
         python3 -c 'import huggingface_hub; print("huggingface_hub", huggingface_hub.__version__, "installed outside the mirror window")' || true
       fi
       ;;
@@ -388,27 +345,6 @@ cd "$WORK"
 echo "=== e2e/$PROTO (base=$EASYBLOBS_BASE, CAS before: $before files) ==="
 # A per-protocol override (prep_client) wins over the suite's own script when
 # the stock image already ships what the script installs.
-
-# Some suites INSTALL their client first (pip install huggingface_hub, conan
-# via pip, ...). Those installs legitimately need a real package index, which
-# the allowlist proxy blocks - so they hang or fail before the protocol is
-# exercised. Give the install phase unrestricted egress, then restore the
-# restriction for the measured test window.
-prep_restore_egress() {
-  if [ -n "${EASYBLOBS_ALLOWLIST_PROXY:-}" ]; then
-    export http_proxy="$EASYBLOBS_ALLOWLIST_PROXY"
-    export https_proxy="$EASYBLOBS_ALLOWLIST_PROXY"
-    export HTTP_PROXY="$EASYBLOBS_ALLOWLIST_PROXY"
-    export HTTPS_PROXY="$EASYBLOBS_ALLOWLIST_PROXY"
-    export NO_PROXY="127.0.0.1,localhost"
-    export no_proxy="127.0.0.1,localhost"
-  fi
-}
-prep_open_egress() {
-  unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
-  export NO_PROXY="*"
-  export no_proxy="*"
-}
 
 if prep_client; then
   echo "(used the per-protocol client override)"
