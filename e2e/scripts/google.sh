@@ -55,6 +55,6 @@ public class AarCheck {
 JAVA
   javac -d /tmp /tmp/AarCheck.java 2>/dev/null
   entries=$(java -cp /tmp AarCheck "$aar") || {
-    echo "google: the aar is not a readable archive (or lacks AndroidManifest.xml)"; exit 1; })
+    echo "google: the aar is not a readable archive (or lacks AndroidManifest.xml)"; exit 1; }
 fi
 echo "google: mvn resolved androidx.core:core:1.13.0 ($(wc -c <"$aar") bytes, $entries entries)"
