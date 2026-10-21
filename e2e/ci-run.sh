@@ -391,12 +391,39 @@ after_bytes=$(data_bytes)
 # reg.Blobs.Put via storeFile, so a conan run that downloads anything must grow
 # the CAS. If it does not, the client never reached the mount at all.)
 #
+# A few suites exercise a READ-ONLY surface on purpose: they prove the adapter
+# answers correctly (the client compiles and runs against the response) and the
+# adapter legitimately has nothing to store for those calls. Failing them for
+# "the CAS did not grow" would be testing the wrong thing.
+#
+#   swift  identifiers/releases are metadata lookups; the client then compiles
+#          and runs a Swift program against the parsed answer. Nothing is
+#          downloaded, so nothing is cached.
+readonly_protocol() {
+  case "$1" in
+    swift) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 #
 # The verdict is printed only AFTER the assertion, so a failing protocol can
 # never also print "OK" (it used to, and made the logs contradict themselves).
 cached=0
 [ "$after" -gt "$before" ] && cached=1
 [ "$after_bytes" -gt "$before_bytes" ] && cached=1
+# A read-only suite passes when the mount demonstrably served it, even though
+# it had nothing to cache.
+if [ "$cached" -ne 1 ] && readonly_protocol "$PROTO"; then
+  rn=$(grep -c "req .* /artifacts/$PROTO" /tmp/easyblobs.log 2>/dev/null)
+  [ -n "$rn" ] || rn=0
+  if [ "$rn" -eq 0 ]; then
+    echo "FAIL: e2e/$PROTO served nothing from the mount (read-only suite, 0 requests)" >&2
+    exit 1
+  fi
+  echo "=== e2e/$PROTO OK (read-only suite; mount served $rn request(s), nothing to cache) ==="
+  exit 0
+fi
 if [ "$cached" -ne 1 ]; then
   echo "FAIL: e2e/$PROTO cached nothing (CAS $before->$after files, data $before_bytes->$after_bytes bytes)" >&2
   # A SHRINKING data dir means something deleted the server's storage - a bug

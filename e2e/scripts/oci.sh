@@ -10,7 +10,12 @@ REG="$EASYBLOBS_URL"
 # fetch_manifest <repo> <tag>: pull the manifest list and print the first
 # platform digest, proving the registry resolved through the mirror.
 fetch_manifest() {
-  wget -qO- --header='Accept: application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.index.v1+json' \
+  # --timeout bounds the wait when the upstream registry is unreachable. The
+  # adapter proxies /v2 to Docker Hub; if this runner cannot reach it the
+  # request otherwise sits until the server's own 2-minute response-header
+  # timeout, which looks like a hang rather than a clear failure.
+  wget -qO- --timeout=30 --tries=1 \
+    --header='Accept: application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.index.v1+json' \
     "$REG/v2/$1/manifests/$2" | tr '}' '\n' | grep -o 'sha256:[a-f0-9]\{64\}' | head -1
 }
 
