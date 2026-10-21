@@ -69,7 +69,14 @@ cas_count() {
 # table) rather than as a CAS blob, so the CAS file count does not move even
 # though the pull succeeded. Measure the whole data dir as well, so those
 # protocols are not failed on a technicality while still being checked.
-data_bytes() { du -sb "$EASYBLOBS_DATA" 2>/dev/null | awk '{print $1}' || echo 0; }
+# NOTE: `du -sb` is GNU-only (busybox has no -b), and a failed command inside a
+# function under `set -e` yields an empty string, which then compared as 0 and
+# made every protocol look like it cached nothing. Sum the file SIZES in POSIX
+# awk instead: same question, no GNU dependency, never empty.
+data_bytes() {
+  find "$EASYBLOBS_DATA" -type f -exec wc -c {} + 2>/dev/null |
+    awk '{s+=$1} END {printf "%d\n", s}'
+}
 
 before=$(cas_count)
 before_bytes=$(data_bytes)
