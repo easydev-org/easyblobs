@@ -257,7 +257,15 @@ X
         composer config repositories.packagist.org false >/dev/null 2>&1 || true
         echo "composer repositories:"
         composer config repositories 2>/dev/null | head -20 || true
-        composer require --no-interaction --no-progress psr/container
+        # --no-cache + COMPOSER_CACHE_DIR above: force a real fetch. Also show
+        # the version and prove the mount answers packages.json BEFORE requiring,
+        # so 'zero requests' can be attributed correctly.
+        echo "composer version: $(composer --version 2>/dev/null | head -1)"
+        if command -v curl >/dev/null; then
+          pc=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "$EASYBLOBS_BASE/packages.json" 2>/dev/null)
+          echo "mount /packages.json -> $pc"
+        fi
+        composer require --no-interaction --no-progress --no-cache psr/container
         php -r 'require "vendor/autoload.php"; echo "composer + psr/container: ", interface_exists("Psr\\Container\\ContainerInterface") ? "ok" : "missing", "\n";'
         return 0
       fi
@@ -288,17 +296,24 @@ X
       # mirror temporarily unset, then let the suite set HEX_MIRROR for the
       # dependency resolution.
       if command -v mix >/dev/null; then
-        if [ -f /opt/hex-archive/hex.ez ]; then
-          mix archive.install /opt/hex-archive/hex.ez --force >/dev/null || true
-        else
-          (
-            set +e
-            unset HEX_MIRROR
+        (
+          set +e
+          # Hex tool install must NOT go through the mirror (no /installs route).
+          unset HEX_MIRROR
+          if [ -f /opt/hex-archive/hex.ez ]; then
+            mix archive.install /opt/hex-archive/hex.ez --force >/dev/null 2>&1
+          else
             mix local.hex --force >/dev/null 2>&1
-            mix local.rebar --force >/dev/null 2>&1
-          )
+          fi
+          mix local.rebar --force >/dev/null 2>&1
+        )
+        # Whether it succeeded is decided OUTSIDE this block: if hex is present
+        # the suite can proceed; if the tool install failed (no archive and no
+        # egress) the suite will say so clearly.
+        if [ -d "${MIX_HOME:-$HOME/.mix}/archives" ]; then
+          echo "(hex tool available; installed outside the mirror window)"
         fi
-        echo "(hex tool installed OUTSIDE the mirror window)"
+        echo "(hex prep done)"
       fi
       ;;
   esac
@@ -372,7 +387,11 @@ if [ "$cached" -ne 1 ]; then
   # The two usual causes, named so the next reader does not have to guess:
   #   - the client never connected (wrong source/mirror config), or
   #   - it connected somewhere else (a proxy / a hardcoded upstream).
-  n=$(grep -c "req .* /artifacts/" /tmp/easyblobs.log 2>/dev/null || echo 0)
+  # NOTE: `grep -c ... || echo 0` yields "0\n0" when grep finds nothing (it
+  # prints 0 AND exits 1), which then breaks the numeric test below. Use a
+  # plain command substitution and default it separately.
+  n=$(grep -c "req .* /artifacts/" /tmp/easyblobs.log 2>/dev/null)
+  [ -n "$n" ] || n=0
   echo "      easyblobs saw $n request(s) in total." >&2
   if [ "$n" -eq 0 ]; then
     echo "      ZERO requests: the client never reached the mount." >&2
