@@ -251,13 +251,19 @@ jobs:
           export GOMODCACHE=/tmp/gomodcache
           export GOPATH=/tmp/gopath
           mkdir -p "$HOME" "$GOCACHE" "$GOMODCACHE" "$GOPATH"
-          ( cd e2e/allowlist-proxy && \
-            rm -f go.mod go.sum && \
-            go mod init allowlistproxy && \
-            GOWORK=off GOFLAGS=-mod=mod CGO_ENABLED=0 GO111MODULE=on \
-              go build -o /tmp/allowlist-proxy . ) 2>&1
-          test -x /tmp/allowlist-proxy || { echo "FATAL: proxy did not build"; exit 1; }
-          echo "build ok: $(ls -l /tmp/allowlist-proxy)"
+          # NOTE: no line continuations here. A multi-line subshell with `\`
+          # silently stopped after `go mod init` in the container's shell, so
+          # `go build` never ran and the step died with no message.
+          set -x
+          rm -rf /tmp/aproxy
+          mkdir -p /tmp/aproxy
+          cp e2e/allowlist-proxy/main.go /tmp/aproxy/main.go
+          cd /tmp/aproxy
+          go mod init allowlistproxy
+          GOWORK=off GO111MODULE=on go build -o /tmp/allowlist-proxy .
+          set +x
+          test -x /tmp/allowlist-proxy || { echo "FATAL: proxy did not build"; ls -la /tmp/aproxy; exit 1; }
+          echo "build ok"
 
           nohup env ALLOWED_HOST="127.0.0.1:${EASYBLOBS_PORT}" LISTEN="127.0.0.1:8888" \
             /tmp/allowlist-proxy >/tmp/allowlist-proxy.log 2>&1 &
