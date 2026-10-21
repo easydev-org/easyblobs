@@ -13,10 +13,15 @@ echo "luarocks install (server=$EASYBLOBS_BASE)"
 # mount (the server log showed ZERO luarocks requests, only its own retries
 # against luarocks.org). Writing the config makes the mount the only server.
 mkdir -p /root/.luarocks
-cat > /root/.luarocks/config-5.4.lua <<LUA
-rocks_servers = { "$EASYBLOBS_BASE" }
-variables = { LUA_INCDIR = "/usr/include/lua5.4" }
-LUA
+printf '%s\n' \
+  "rocks_servers = { \"$EASYBLOBS_BASE\" }" \
+  'variables = { LUA_INCDIR = "/usr/include/lua5.4" }' \
+  > /root/.luarocks/config-5.4.lua
+# Point luarocks at that file EXPLICITLY. It reads ~/.luarocks/config-<ver>.lua
+# by default, but the tree/prefix used here may resolve a different config; an
+# explicit LUAROCKS_CONFIG removes the doubt. The previous run still fell back
+# to luarocks.org, which is what "Failed searching manifest" then reported.
+export LUAROCKS_CONFIG=/root/.luarocks/config-5.4.lua
 echo "luarocks config:"
 cat /root/.luarocks/config-5.4.lua
 if ! luarocks --lua-version=5.4 \
