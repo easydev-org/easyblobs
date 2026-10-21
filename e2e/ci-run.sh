@@ -76,12 +76,14 @@ if ! sh "e2e/scripts/$PROTO.sh"; then
 fi
 
 after=$(cas_count)
-echo "=== e2e/$PROTO OK (CAS: $before -> $after files) ==="
 
 # The cache assertion: a pull-through MUST leave bytes behind, else an adapter
 # that only proxies would pass. A couple of protocols keep their cache in the
 # METADATA db and never grow the CAS file count, so they assert "did not lose
 # data" instead of a strict increase.
+#
+# NOTE: the verdict is printed only AFTER the assertion, so a failing protocol
+# can never also print "OK" (which it used to, and made the logs lie).
 case "$PROTO" in
   huggingface|netcache)
     [ "$after" -ge "$before" ] || {
@@ -96,3 +98,5 @@ case "$PROTO" in
     }
     ;;
 esac
+
+echo "=== e2e/$PROTO OK (CAS: $before -> $after files) ==="
