@@ -172,6 +172,11 @@ X
       # explicit composer.json that names the mount as the ONLY repository, so
       # packagist cannot be used as a fallback.
       if command -v composer >/dev/null; then
+        # A warm image cache would satisfy the install without any fetch; drop
+        # it so the only place left to get the package is the mount.
+        rm -rf "${COMPOSER_HOME:-$HOME/.composer}/cache" "${COMPOSER_HOME:-$HOME/.composer}/cache-files" 2>/dev/null || true
+        export COMPOSER_CACHE_DIR="$(mktemp -d)"
+        export COMPOSER_NO_INTERACTION=1
         d="$(mktemp -d)"
         cd "$d"
         cat > composer.json <<X
@@ -179,11 +184,16 @@ X
   "repositories": [
     { "type": "composer", "url": "$EASYBLOBS_BASE/" }
   ],
+  "repositories-priority": ["easy-platform"],
   "config": { "secure-http": false }
 }
 X
+        # Remove packagist entirely; with only the mount configured, a successful
+        # install PROVES the package came through easyblobs.
         composer config repositories.packagist.org false >/dev/null 2>&1 || true
-        composer require --no-interaction --no-progress psr/container >/dev/null
+        echo "composer repositories:"
+        composer config repositories 2>/dev/null | head -20 || true
+        composer require --no-interaction --no-progress psr/container
         php -r 'require "vendor/autoload.php"; echo "composer + psr/container: ", interface_exists("Psr\\Container\\ContainerInterface") ? "ok" : "missing", "\n";'
         return 0
       fi
@@ -215,6 +225,13 @@ cd "$WORK"
 echo "=== e2e/$PROTO (base=$EASYBLOBS_BASE, CAS before: $before files) ==="
 # A per-protocol override (prep_client) wins over the suite's own script when
 # the stock image already ships what the script installs.
+
+# Trace the suites that are known to exit silently, so a `set -e` abort still
+# shows WHICH command failed. (hex and jsrnpm both printed nothing at all.)
+case "$PROTO" in
+  hex|jsrnpm|nix|luarocks|oci|protobuf) set -x ;;
+esac
+
 if prep_client; then
   echo "(used the per-protocol client override)"
 elif ! sh "$REPO/e2e/scripts/$PROTO.sh"; then
