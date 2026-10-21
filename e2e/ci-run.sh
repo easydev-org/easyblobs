@@ -69,17 +69,17 @@ export GOSUMDB=off
 # composer "passed" while easyblobs saw zero requests).
 echo "--- connectivity sentinel ---"
 if command -v curl >/dev/null; then
-  code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "$EASYBLOBS_ORIGIN/healthz" || echo 000)
+  # NOTE: never write `$(curl ... || echo 000)`. When curl prints '000' AND
+  # exits non-zero the two concatenate into '000000', which then fails an
+  # equality test and aborts the step for no reason. Read the exit status on
+  # its own line.
+  code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "$EASYBLOBS_ORIGIN/healthz" 2>/dev/null)
   echo "  mount /healthz      -> $code"
   [ "$code" = "200" ] || { echo "FATAL: the mount is not reachable" >&2; exit 1; }
-  pub=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 https://rubygems.org/ 2>/dev/null || echo 000)
+  pub=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 https://rubygems.org/ 2>/dev/null)
   echo "  rubygems.org        -> $pub"
-  pub2=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 https://repo.packagist.org/packages.json 2>/dev/null || echo 000)
-  echo "  packagist.org       -> $pub2"
-  # Not fatal (a runner may legitimately have no egress), but loud: with egress
-  # a client CAN bypass the mount, so a green result must be read carefully.
-  case "$pub$pub2" in
-    *200*|*30*) echo "  WARNING: public registries are reachable; the client could bypass the mount." >&2 ;;
+  case "$pub" in
+    200|30*) echo "  WARNING: rubygems.org is reachable directly; only the allowlist proxy prevents a bypass." >&2 ;;
   esac
 fi
 
