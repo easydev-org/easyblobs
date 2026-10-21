@@ -268,15 +268,17 @@ jobs:
           # Start detached. `nohup ... &` alone let the step return while the
           # runner then killed the process group, so the proxy was gone by the
           # time a client needed it (which looked like an unrelated failure).
-          # ALLOWED_EGRESS: protocols whose adapter is a PURE PASSTHROUGH have
-          # no local copy to serve - their manifest/index/objects genuinely live
-          # at the origin (OCI registry, luarocks repo, hex's tool bootstrap).
-          # Blocking those would only prove the origin is unreachable, so their
-          # hosts are allowlisted while every other host stays blocked. A
-          # protocol that the adapter really caches is unaffected: for those the
-          # mount is still the only source.
+          # ALLOWED_EGRESS is the set of origins the SERVER may reach when it has
+          # no local copy yet (it is a client of the real upstreams). It must
+          # cover every upstream the adapters genuinely mirror, otherwise the
+          # server answers 404 in 2ms and the protocol looks broken:
+          #   req GET /artifacts/cargo/index/an/yh/anyhow -> 404 (2ms)
+          # Anything not listed stays blocked, so a package manager still cannot
+          # fetch around the mount - it must go through the server, which then
+          # stores what it fetched.
+          ALLOWED_EGRESS_LIST="registry-1.docker.io,production.cloudflare.docker.com,auth.docker.io,index.docker.io,luarocks.org,luarocks.io,repo.hex.pm,builds.hex.pm,opam.ocaml.org,stackage.org,hackage.haskell.org,raw.githubusercontent.com,dl.fedoraproject.org,mirrors.fedoraproject.org,download.fedoraproject.org,deb.debian.org,security.debian.org,dl-cdn.alpinelinux.org,buf.build,api.buf.build,proxy.golang.org,sum.golang.org,storage.googleapis.com,index.crates.io,static.crates.io,crates.io,github.com,api.github.com,codeload.github.com,objects.githubusercontent.com,repo.packagist.org,packagist.org,registry.npmjs.org,npm.jsr.io,repo1.maven.org,repo.maven.apache.org,dl.google.com,plugins.gradle.org,repo.clojars.org,repo.spring.io,jitpack.io,rubygems.org,index.rubygems.org,pypi.org,files.pythonhosted.org,cran.r-project.org,cloud.r-project.org,conda.anaconda.org,repo.anaconda.com,api.nuget.org,pkg.julialang.org,huggingface.co,cdn-lfs.huggingface.co,center.conan.io,center2.conan.io"
           setsid env \
-            ALLOWED_EGRESS="registry-1.docker.io,production.cloudflare.docker.com,auth.docker.io,index.docker.io,luarocks.org,luarocks.io,repo.hex.pm,builds.hex.pm,opam.ocaml.org,stackage.org,hackage.haskell.org,raw.githubusercontent.com,dl.fedoraproject.org,mirrors.fedoraproject.org,download.fedoraproject.org,deb.debian.org,security.debian.org,dl-cdn.alpinelinux.org,buf.build,api.buf.build,proxy.golang.org,sum.golang.org,storage.googleapis.com" \
+            ALLOWED_EGRESS="$ALLOWED_EGRESS_LIST" \
             ALLOWED_HOST="127.0.0.1:${EASYBLOBS_PORT}" LISTEN="127.0.0.1:8888" \
             /tmp/bin/allowlist-proxy-bin >/tmp/allowlist-proxy.log 2>&1 < /dev/null &
           PROXY_PID=$!
