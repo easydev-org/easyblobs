@@ -5,7 +5,14 @@ set -e
 : "${EASYBLOBS_BASE:?EASYBLOBS_BASE not set}"
 export HEX_MIRROR="$EASYBLOBS_BASE/"
 mix local.rebar --force >/dev/null 2>&1 || true
-mix archive.install /opt/hex-archive/hex.ez --force >/dev/null
+# hex itself must be installed before it can be used. The project's own tool
+# image bakes the archive at /opt/hex-archive/hex.ez; a plain elixir image does
+# not have it, so fall back to fetching hex from hex.pm.
+if [ -f /opt/hex-archive/hex.ez ]; then
+  mix archive.install /opt/hex-archive/hex.ez --force >/dev/null
+else
+  mix local.hex --force >/dev/null
+fi
 # Create a project whose dependency is fetched from the mirror, then compile+run.
 rm -rf /w && mix new /w --app w >/dev/null
 cd /w

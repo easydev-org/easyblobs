@@ -226,19 +226,28 @@ echo "=== e2e/$PROTO (base=$EASYBLOBS_BASE, CAS before: $before files) ==="
 # A per-protocol override (prep_client) wins over the suite's own script when
 # the stock image already ships what the script installs.
 
-# Trace the suites that are known to exit silently, so a `set -e` abort still
-# shows WHICH command failed. (hex and jsrnpm both printed nothing at all.)
-case "$PROTO" in
-  hex|jsrnpm|nix|luarocks|oci|protobuf) set -x ;;
-esac
-
 if prep_client; then
   echo "(used the per-protocol client override)"
-elif ! sh "$REPO/e2e/scripts/$PROTO.sh"; then
-  echo "--- FAILED: e2e/$PROTO ---" >&2
-  echo "--- easyblobs log (tail) ---" >&2
-  tail -40 /tmp/easyblobs.log >&2 || true
-  exit 1
+else
+  # Capture the suite's output AND its xtrace to one file. Redirecting inside
+  # an `elif !` condition loses stderr in some shells, which is exactly how
+  # hex/jsrnpm looked like "nothing happened" and cost several CI rounds.
+  OUT=/tmp/e2e-$PROTO.log
+  if sh -x "$REPO/e2e/scripts/$PROTO.sh" >"$OUT" 2>&1; then
+    cat "$OUT"
+  else
+    echo "--- FAILED: e2e/$PROTO (last 60 lines, incl. xtrace) ---" >&2
+    tail -60 "$OUT" >&2
+    echo "--- easyblobs log (tail) ---" >&2
+    tail -30 /tmp/easyblobs.log >&2 || true
+    echo "--- preconditions ---" >&2
+    echo "  base=$EASYBLOBS_BASE" >&2
+    for t in wget curl tar sh bash; do
+      p=$(command -v "$t" 2>/dev/null || echo MISSING)
+      echo "  $t: $p" >&2
+    done
+    exit 1
+  fi
 fi
 
 after=$(cas_count)
