@@ -117,8 +117,18 @@ prep_client() {
       if command -v gem >/dev/null; then
         gem sources --clear-all >/dev/null 2>&1 || true
         gem sources --add "$EASYBLOBS_BASE/" >/dev/null 2>&1 || true
+        # Prove the client is actually pointed at the mount before installing:
+        # a silent fallback to rubygems.org is exactly how this suite passed
+        # while nothing was cached.
+        echo "gem sources now:"
+        gem sources --list
+        gem sources --list | grep -q "$EASYBLOBS_BASE" || {
+          echo "FAIL: the mount is not a gem source" >&2
+          exit 1
+        }
         # `colorize` is NOT part of the ruby image.
-        gem install --no-document colorize
+        # --clear-sources + --source pin it to the mount for THIS install.
+        gem install --no-document --clear-sources --source "$EASYBLOBS_BASE/" colorize
         ruby -e 'require "colorize"; puts "ruby + colorize: #{String.colors.size} colors"'
         return 0
       fi
@@ -157,14 +167,22 @@ X
       fi
       ;;
     composer)
-      # The composer image ships an empty global cache, but composer's own
-      # metadata cache may short-circuit the second run. Clear it and add a
-      # package the suite does not use.
+      # Composer keeps its OWN config in COMPOSER_HOME; a global `composer
+      # config -g` in the image is not necessarily what this run reads. Write an
+      # explicit composer.json that names the mount as the ONLY repository, so
+      # packagist cannot be used as a fallback.
       if command -v composer >/dev/null; then
-        composer config -g secure-http false >/dev/null 2>&1 || true
-        composer config -g repos.packagist composer "$EASYBLOBS_BASE/" >/dev/null 2>&1 || true
         d="$(mktemp -d)"
         cd "$d"
+        cat > composer.json <<X
+{
+  "repositories": [
+    { "type": "composer", "url": "$EASYBLOBS_BASE/" }
+  ],
+  "config": { "secure-http": false }
+}
+X
+        composer config repositories.packagist.org false >/dev/null 2>&1 || true
         composer require --no-interaction --no-progress psr/container >/dev/null
         php -r 'require "vendor/autoload.php"; echo "composer + psr/container: ", interface_exists("Psr\\Container\\ContainerInterface") ? "ok" : "missing", "\n";'
         return 0
@@ -222,6 +240,14 @@ cached=0
 [ "$after_bytes" -gt "$before_bytes" ] && cached=1
 if [ "$cached" -ne 1 ]; then
   echo "FAIL: e2e/$PROTO cached nothing (CAS $before->$after files, data $before_bytes->$after_bytes bytes)" >&2
+  # The two usual causes, named so the next reader does not have to guess:
+  #   - the client never connected (wrong source/mirror config), or
+  #   - it connected somewhere else (a proxy / a hardcoded upstream).
+  n=$(grep -c "req .* /artifacts/" /tmp/easyblobs.log 2>/dev/null || echo 0)
+  echo "      easyblobs saw $n request(s) in total." >&2
+  if [ "$n" -eq 0 ]; then
+    echo "      ZERO requests: the client never reached the mount." >&2
+  fi
   exit 1
 fi
 
