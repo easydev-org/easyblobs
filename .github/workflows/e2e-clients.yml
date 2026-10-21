@@ -106,11 +106,10 @@ jobs:
           set -euo pipefail
           echo "driver: ${{ matrix.driver }}"
           echo "protocols: ${{ matrix.protocols }}"
-          # The clients a script needs are the driver's whole point; failing
-          # loudly here beats a confusing protocol error later.
-          for t in curl wget tar; do
-            command -v "$t" >/dev/null || { echo "missing $t"; exit 1; }
-          done
+          # Do NOT require curl/wget/tar here: the minimal drivers (alpine,
+          # nixos, ubuntu) install them in the next step. A hard check at this
+          # point failed those jobs with "missing curl" before they could.
+          echo "basics are ensured by the install step"
 
       # A few clients are NOT in their base image. Installing them here (rather
       # than baking a custom image) keeps the matrix to stock images, and the
@@ -120,14 +119,30 @@ jobs:
           set -euo pipefail
           P=" ${{ matrix.protocols }} "
           has() { case "$P" in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
-          # ubuntu:24.04 is a bare image: the CI plumbing itself needs these.
-          if command -v apt-get >/dev/null; then
-            need=""
-            for t in curl wget tar git python3 unzip; do
-              command -v "$t" >/dev/null || need="$need $t"
-            done
-            if [ -n "$need" ]; then
+          # The CI plumbing needs a few basics on a bare image. Install only
+          # what is missing, using whichever package manager the image has.
+          need=""
+          for t in curl wget tar git; do
+            command -v "$t" >/dev/null || need="$need $t"
+          done
+          if [ -n "$need" ]; then
+            if command -v apt-get >/dev/null; then
               apt-get update -qq && apt-get install -y -qq $need >/dev/null
+            elif command -v apk >/dev/null; then
+              apk add --no-cache $need >/dev/null
+            elif command -v dnf >/dev/null; then
+              dnf install -y -q $need >/dev/null
+            elif command -v microdnf >/dev/null; then
+              microdnf install -y $need >/dev/null
+            else
+              echo "cannot install missing tools ($need): no known package manager" >&2
+              exit 1
+            fi
+          fi
+          # python3 only where a suite drives the API directly.
+          if has swift || has protobuf; then
+            if ! command -v python3 >/dev/null && command -v apt-get >/dev/null; then
+              apt-get update -qq && apt-get install -y -qq python3 >/dev/null
             fi
           fi
           if has conan; then
