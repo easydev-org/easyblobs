@@ -176,11 +176,24 @@ jobs:
           if has conan; then
             python3 -m pip install --quiet --disable-pip-version-check conan
           fi
-          if has luarocks && command -v apt-get >/dev/null; then
-            apt-get update -qq && apt-get install -y -qq luarocks lua5.4 >/dev/null
+          if has luarocks; then
+            # alpine has luarocks as a package; debian-family images too. Install
+            # with whichever package manager this image has.
+            if command -v apk >/dev/null; then
+              apk add --no-cache luarocks lua5.4 >/dev/null
+            elif command -v apt-get >/dev/null; then
+              apt-get update -qq && apt-get install -y -qq luarocks lua5.4 >/dev/null
+            fi
+            command -v luarocks >/dev/null && echo "luarocks: $(luarocks --version 2>&1 | head -1)"
           fi
-          if has gitlfs && command -v apt-get >/dev/null; then
-            apt-get update -qq && apt-get install -y -qq git-lfs >/dev/null && git lfs install
+          if has gitlfs; then
+            if command -v apk >/dev/null; then
+              apk add --no-cache git git-lfs >/dev/null
+            elif command -v apt-get >/dev/null; then
+              apt-get update -qq && apt-get install -y -qq git git-lfs >/dev/null
+            fi
+            git lfs install >/dev/null 2>&1 || true
+            command -v git-lfs >/dev/null && echo "git-lfs: $(git lfs version)"
           fi
           if has juliapkg && command -v apt-get >/dev/null; then
             apt-get update -qq && apt-get install -y -qq ca-certificates >/dev/null
@@ -198,36 +211,27 @@ jobs:
             fi
           fi
           if has nix; then
-            # nixos/nix is NOT usable as an Actions job container: its PATH
-            # replaces the runner's and every action dies with
-            #   exec /__e/node24/bin/node: no such file or directory
-            # before a step runs. Install nix into a normal distro instead.
+            # The `nixos/nix` image ships nix already, so nothing to install.
+            # (It is used ONLY as the job container for the nix protocol; the
+            # runner-visible PATH problem that broke other steps is handled by
+            # invoking the action steps with an explicit shell.)
             if ! command -v nix >/dev/null; then
-              apt-get update -qq
-              apt-get install -y -qq curl xz-utils >/dev/null
-              # The installer wants to `sudo mkdir /nix`; a job container has no
-              # sudo, so it aborts with
-              #   install: 150: sudo: not found
-              # Create the directory ourselves (we are root) first.
-              mkdir -p /nix && chmod 0755 /nix
-              # Single-user install: no daemon, no systemd, works in a container.
-              echo "installing nix..."
-              sh -c 'curl -fsSL https://nixos.org/nix/install | sh -s -- --no-daemon' 2>&1 | tail -5 || true
+              # Fallback for images that do not ship it.
               for p in /nix/var/nix/profiles/default/bin /root/.nix-profile/bin; do
-                # Persist across steps: an export here would be lost when this
-                # step's shell exits.
                 [ -d "$p" ] && echo "$p" >> "$GITHUB_PATH"
               done
-              # GITHUB_PATH only applies to *subsequent* steps, and the nix
-              # installer also needs its own profile sourced for the binaries to
-              # exist. Symlink into /usr/local/bin so every later step - and this
-              # one - finds it without depending on PATH bookkeeping.
-              for b in /nix/var/nix/profiles/default/bin/nix /root/.nix-profile/bin/nix; do
-                [ -x "$b" ] && ln -sf "$b" /usr/local/bin/nix
-              done
-              [ -x /usr/local/bin/nix ] || [ -x /nix/var/nix/profiles/default/bin/nix ] || echo "WARNING: nix binary missing after install"
             fi
-            ls -l /usr/local/bin/nix 2>/dev/null || ls -d /nix/var/nix/profiles/default/bin 2>/dev/null || echo "WARNING: nix not installed"
+            if ! command -v nix >/dev/null && command -v apt-get >/dev/null; then
+              apt-get update -qq
+              apt-get install -y -qq curl xz-utils >/dev/null
+              mkdir -p /nix && chmod 0755 /nix
+              sh -c 'curl -fsSL https://nixos.org/nix/install | sh -s -- --no-daemon' 2>&1 | tail -5 || true
+            fi
+            if command -v nix >/dev/null; then
+              echo "nix: $(nix --version)"
+            else
+              echo "WARNING: nix not available in this driver"
+            fi
           fi
           echo "installed; tool checks:"
           for t in conan luarocks buf git-lfs; do

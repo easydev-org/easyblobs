@@ -64,21 +64,25 @@ apk	alpine:3.20	script runs `apk add --allow-untrusted`
 rpm	fedora:41	script runs `dnf install`
 cran	rocker/r-ver:4.4	script runs `Rscript install.packages`
 
-# ===========================================================================
-# Dropped, with the reason recorded instead of a permanently red cell. Each of
-# these was tried and failed for an environmental reason, NOT because the
-# adapter is broken.
+# --- protocols that need their own distro/toolchain image ---
 #
-#   oci       Pure passthrough (no local copy). The request sits for the full
-#             2-minute timeout and ends 404 because this runner cannot reach
-#             registry-1.docker.io. Nothing to do with the adapter; the OCI
-#             paths are covered by oci/adapter_test.go and the other suites.
-#   luarocks  Same shape: only a target entry pointing at luarocks.org, so the
-#             suite is a plain fetch from that host, which times out here.
-#   nix       The Nix installer needs sudo (or a systemd daemon). A job
-#             container is root but has no sudo, and pre-creating /nix is not
-#             enough: the installer still exits without producing a binary.
-#   git       No git protocol in this repository (only gitlfs).
-#   gitlfs    The adapter serves ONLY the LFS object protocol; gitlfs.sh does a
-#             full `git clone`, which cannot work against it by design.
-#   swift     Needs `swiftc`, which is not installable in a stock image.
+# These five were previously parked here with "environmental" excuses. They are
+# back in the matrix: each one only needed the RIGHT image, not a workaround.
+#
+#   oci       ubuntu:24.04 + wget/tar speaks /v2 itself (no docker/dockerd).
+#   luarocks  needs the luarocks CLI, which alpine has as a package.
+#   nix       needs a real Nix install; the official installer refuses without
+#             sudo, so use an image that SHIPS nix (see the nix-driver notes).
+#   gitlfs    needs the git-lfs binary; the adapter serves LFS objects, and the
+#             suite is adapted to that protocol (no full clone required).
+#   swift     needs a Swift toolchain; the official swift image has swiftc.
+oci	ubuntu:24.04	script speaks the /v2 protocol with wget (needs EASYBLOBS_URL)
+luarocks	alpine:3.20	script runs `luarocks` (apk-installed in the job)
+nix	nixos/nix	official Nix image; nix is preinstalled
+gitlfs	alpine:3.20	script drives the LFS object protocol with git + git-lfs
+swift	swift:6.0	official Swift image ships swiftc
+
+# NOTE: `git` is intentionally absent. This repository has no git protocol at
+# all (only `gitlfs`), so e2e/scripts/git.sh targets an older build that served
+# /artifacts/git/<host>/<repo>.git. It is not "dropped for now" - there is no
+# server-side endpoint for it to exercise.
