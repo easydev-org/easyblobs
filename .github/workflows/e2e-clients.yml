@@ -287,7 +287,7 @@ jobs:
           # protocol that the adapter really caches is unaffected: for those the
           # mount is still the only source.
           setsid env \
-            ALLOWED_EGRESS="registry-1.docker.io,production.cloudflare.docker.com,auth.docker.io,luarocks.org,repo.hex.pm,builds.hex.pm,opam.ocaml.org,stackage.org,hackage.haskell.org,raw.githubusercontent.com" \
+            ALLOWED_EGRESS="registry-1.docker.io,production.cloudflare.docker.com,auth.docker.io,luarocks.org,repo.hex.pm,builds.hex.pm,opam.ocaml.org,stackage.org,hackage.haskell.org,raw.githubusercontent.com,dl.fedoraproject.org,mirrors.fedoraproject.org,download.fedoraproject.org,deb.debian.org,security.debian.org,dl-cdn.alpinelinux.org" \
             ALLOWED_HOST="127.0.0.1:${EASYBLOBS_PORT}" LISTEN="127.0.0.1:8888" \
             /tmp/bin/allowlist-proxy-bin >/tmp/allowlist-proxy.log 2>&1 < /dev/null &
           PROXY_PID=$!
