@@ -26,6 +26,40 @@ import (
 	"time"
 )
 
+// relayConnect implements a plain CONNECT tunnel for an allowlisted host. It is
+// deliberately minimal: dial, tell the client 200, then splice the two
+// connections. Used only for origins listed in ALLOWED_EGRESS.
+func relayConnect(w http.ResponseWriter, r *http.Request) {
+	upstream, err := net.DialTimeout("tcp", r.Host, 15*time.Second)
+	if err != nil {
+		log.Printf("CONNECT dial %s: %v", r.Host, err)
+		http.Error(w, "upstream unreachable", http.StatusBadGateway)
+		return
+	}
+	defer func() { _ = upstream.Close() }()
+
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "hijacking unsupported", http.StatusInternalServerError)
+		return
+	}
+	client, _, err := hj.Hijack()
+	if err != nil {
+		return
+	}
+	defer func() { _ = client.Close() }()
+
+	if _, err := client.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
+		return
+	}
+	log.Printf("ALLOW CONNECT %s", r.Host)
+
+	done := make(chan struct{}, 2)
+	go func() { _, _ = io.Copy(upstream, client); done <- struct{}{} }()
+	go func() { _, _ = io.Copy(client, upstream); done <- struct{}{} }()
+	<-done
+}
+
 func main() {
 	addr := os.Getenv("LISTEN")
 	if addr == "" {
@@ -38,10 +72,35 @@ func main() {
 	}
 	allowed = strings.ToLower(allowed)
 
+	// Some protocols are pure PASSTHROUGH mirrors: the adapter serves no local
+	// copy and the client's own manifest/index/objects live upstream (OCI's
+	// registry and luarocks' repository are the two clearest cases). Blocking
+	// their origin would not prove anything about the adapter - it would only
+	// prove the origin is unreachable. Those hosts may be listed explicitly in
+	// ALLOWED_EGRESS, as a comma-separated allowlist.
+	//
+	// Everything else stays blocked, so the mount is still the only way to get
+	// a package that the adapter actually caches.
+	egress := map[string]bool{}
+	for _, h := range strings.Split(os.Getenv("ALLOWED_EGRESS"), ",") {
+		if h = strings.ToLower(strings.TrimSpace(h)); h != "" {
+			egress[h] = true
+		}
+	}
+
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// CONNECT = the client wants a raw tunnel (normally for TLS). Refusing
 		// it is what actually blocks `https://rubygems.org`.
 		if r.Method == http.MethodConnect {
+			// A CONNECT names host:port; compare on the host part.
+			h := strings.ToLower(r.Host)
+			if i := strings.LastIndex(h, ":"); i > 0 {
+				h = h[:i]
+			}
+			if egress[h] {
+				relayConnect(w, r)
+				return
+			}
 			log.Printf("DENY CONNECT %s", r.Host)
 			http.Error(w, "blocked by allowlist-proxy", http.StatusForbidden)
 			return

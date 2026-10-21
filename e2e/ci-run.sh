@@ -96,7 +96,6 @@ proto_mount() {
   case "$1" in
     google|gradle|clojars|spring|jitpack) echo maven ;;
     jsrnpm) echo npm ;;
-    gitlfs) echo git ;;
     *) echo "$1" ;;
   esac
 }
@@ -295,7 +294,13 @@ X
       # but `conan inspect` then needs a Conanfile in the CWD. Serve the
       # assertion from the client cache instead, which is what proves the pull.
       if command -v conan >/dev/null; then
-        export CONAN_HOME="${CONAN_HOME:-$HOME/.conan2}"
+        # A COLD client cache. The python image may already carry a conan home
+        # (or a previous protocol in the same job may have left one), and with
+        # `conan download` finding the recipe locally, ZERO requests reach the
+        # mount - which is exactly what the log showed.
+        export CONAN_HOME=/tmp/conan-home-cold
+        rm -rf "$CONAN_HOME"
+        mkdir -p "$CONAN_HOME"
         conan profile detect --force >/dev/null 2>&1 || true
         conan remote add easy-platform "$EASYBLOBS_BASE" --force >/dev/null 2>&1 || true
         conan download zlib/1.3.1 -r easy-platform --only-recipe

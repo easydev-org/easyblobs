@@ -10,8 +10,20 @@ mix local.rebar --force >/dev/null 2>&1 || true
 # not have it, so fall back to fetching hex from hex.pm.
 if [ -f /opt/hex-archive/hex.ez ]; then
   mix archive.install /opt/hex-archive/hex.ez --force >/dev/null
+elif [ -n "${HEX_ARCHIVE_URL:-}" ]; then
+  # A pre-fetched archive served by the harness. `mix local.hex` needs
+  # HEX_MIRROR/installs/hex-1.x.csv, which a metadata-only mirror does not
+  # implement (and an isolated run cannot reach hex.pm to bootstrap from), so
+  # the archive is supplied out of band.
+  curl -fsSL -o /tmp/hex.ez "$HEX_ARCHIVE_URL"
+  mix archive.install /tmp/hex.ez --force >/dev/null
 else
-  mix local.hex --force >/dev/null
+  # Last resort: bootstrap from hex.pm directly with the mirror temporarily
+  # unset (the tool install is not what this suite measures).
+  (
+    unset HEX_MIRROR
+    mix local.hex --force >/dev/null
+  )
 fi
 # Create a project whose dependency is fetched from the mirror, then compile+run.
 rm -rf /w && mix new /w --app w >/dev/null

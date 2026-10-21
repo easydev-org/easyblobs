@@ -5,8 +5,15 @@
 set -e
 : "${EASYBLOBS_BASE:?EASYBLOBS_BASE not set}"
 # Call a real BSR method through artifact (public module read, no auth needed).
+# NOTE: --post-data needs a file or a quoted argument that survives the shell.
+# It was previously written with the JSON inline and the braces/brackets were
+# mangled, so wget exited 8 ("server issued an error response") without ever
+# sending a valid body. Write the payload to a file and use --post-file.
+cat > /tmp/getmodules.json <<'JSON'
+{"moduleRefs":[{"moduleRef":{"module":"buf.build/connectrpc/eliza"}}]}
+JSON
 code=$(wget -qO /tmp/mod --header='Content-Type: application/json' \
-  --post-data='{"moduleRefs":[{"moduleRef":{"module":"buf.build/connectrpc/eliza"}}]}' \
+  --post-file=/tmp/getmodules.json \
   "$EASYBLOBS_BASE/buf.registry.module.v1.ModuleService/GetModules" && echo 0 || echo $?)
 [ "$code" = "0" ] || { echo "protobuf: GetModules rc=$code"; exit 1; }
 echo "module response bytes: $(wc -c </tmp/mod)"

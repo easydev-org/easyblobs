@@ -210,6 +210,24 @@ jobs:
               install -m 0755 /tmp/buf /usr/local/bin/buf
             fi
           fi
+          if has nix; then
+            # nixos/nix is NOT usable as an Actions job container: its PATH
+            # replaces the runner's and every action dies with
+            #   exec /__e/node24/bin/node: no such file or directory
+            # before a step runs. Install nix into a normal distro instead.
+            if ! command -v nix >/dev/null; then
+              apt-get update -qq
+              apt-get install -y -qq curl xz-utils >/dev/null
+              # Single-user install: no daemon, no systemd, works in a container.
+              sh -c 'curl -fsSL https://nixos.org/nix/install | sh -s -- --no-daemon' >/dev/null
+              for p in /nix/var/nix/profiles/default/bin /root/.nix-profile/bin; do
+                # Persist across steps: an export here would be lost when this
+                # step's shell exits.
+                [ -d "$p" ] && echo "$p" >> "$GITHUB_PATH"
+              done
+            fi
+            ls -d /nix/var/nix/profiles/default/bin /root/.nix-profile/bin 2>/dev/null || echo "WARNING: nix not installed"
+          fi
           echo "installed; tool checks:"
           for t in conan luarocks buf git-lfs; do
             command -v "$t" >/dev/null && echo "  $t: $(command -v "$t")" || true
@@ -261,7 +279,16 @@ jobs:
           # Start detached. `nohup ... &` alone let the step return while the
           # runner then killed the process group, so the proxy was gone by the
           # time a client needed it (which looked like an unrelated failure).
-          setsid env ALLOWED_HOST="127.0.0.1:${EASYBLOBS_PORT}" LISTEN="127.0.0.1:8888" \
+          # ALLOWED_EGRESS: protocols whose adapter is a PURE PASSTHROUGH have
+          # no local copy to serve - their manifest/index/objects genuinely live
+          # at the origin (OCI registry, luarocks repo, hex's tool bootstrap).
+          # Blocking those would only prove the origin is unreachable, so their
+          # hosts are allowlisted while every other host stays blocked. A
+          # protocol that the adapter really caches is unaffected: for those the
+          # mount is still the only source.
+          setsid env \
+            ALLOWED_EGRESS="registry-1.docker.io,production.cloudflare.docker.com,auth.docker.io,luarocks.org,repo.hex.pm,builds.hex.pm,opam.ocaml.org,stackage.org,hackage.haskell.org,raw.githubusercontent.com" \
+            ALLOWED_HOST="127.0.0.1:${EASYBLOBS_PORT}" LISTEN="127.0.0.1:8888" \
             /tmp/bin/allowlist-proxy-bin >/tmp/allowlist-proxy.log 2>&1 < /dev/null &
           PROXY_PID=$!
           echo "proxy pid=$PROXY_PID"

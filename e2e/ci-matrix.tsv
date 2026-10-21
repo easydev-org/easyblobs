@@ -20,7 +20,11 @@
 # NOTE: swift.sh compiles with `swiftc`, which is not installable from a stock
 # ubuntu image in a reasonable time; the adapter itself is exercised by the
 # REST-level assertions in the swiftpm unit tests, and `swift` is dropped.
-gitlfs	ubuntu:24.04	script runs `git clone` + `git lfs` (installed in the job)
+# NOTE: gitlfs.sh does a full `git clone`, but this repository's gitlfs adapter
+# serves ONLY the LFS object protocol (/info/lfs/objects/batch and
+# /objects/<oid>); it has no git transport at all. The clone cannot work
+# against it by design, so the suite is dropped. (The object protocol itself is
+# covered by gitlfs/lib_test.go.)
 go	ubuntu:24.04	script runs `go get` (go via setup-go in the job)
 protobuf	ubuntu:24.04	script runs `buf build` (buf downloaded in the job)
 netcache	ubuntu:24.04	script uses curl (Range + repeat-fetch identity)
@@ -57,7 +61,7 @@ hex	elixir:1.17	script runs `mix` + hex archive
 pub	dart:stable	script runs `dart pub`
 juliapkg	julia:1	script runs `julia` Pkg with JULIA_PKG_SERVER
 luarocks	ubuntu:24.04	script runs `luarocks` (installed via apt in the job)
-nix	nixos/nix	script runs `nix store info` / `nix-instantiate`
+nix	ubuntu:24.04	script runs `nix` (installed in the job; nixos/nix breaks Actions)
 debian	debian:bookworm	script runs `apt-get` from a [trusted=yes] source
 apk	alpine:3.20	script runs `apk add --allow-untrusted`
 rpm	fedora:41	script runs `dnf install`
