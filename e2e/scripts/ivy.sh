@@ -17,8 +17,10 @@ name := "ivy-e2e"
 SBT
   cat > /tmp/ivyproj/project/plugins.sbt <<PLG
 resolvers += Resolver.url("easyblobs-ivy", url("$IVY_BASE/"))(Resolver.ivyStylePatterns)
-# sbt 1.10 needs a modern plugin; 0.7.4 targets sbt 0.13 and silently fails to
-# resolve under this launcher. 1.9.16 is published at the same Ivy layout.
+// sbt 1.10 needs a modern plugin; 0.7.4 targets sbt 0.13 and cannot resolve
+// under this launcher. 1.9.16 is published at the same Ivy layout.
+// NOTE: sbt files use `//` comments - a `#` here is a syntax error, which is
+// what made the previous run fail with "'#' expected but found".
 addSbtPlugin("com.typesafe.sbt" % "sbt-native-packager" % "1.9.16")
 PLG
   cd /tmp/ivyproj
