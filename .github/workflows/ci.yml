@@ -38,13 +38,25 @@ jobs:
           go-version-file: go.work
           cache: true
 
-      - name: modules in this workspace
+      # `./...` DOES NOT WORK HERE. The workspace root is not itself a module, so
+      # the pattern walks out of the workspace:
+      #   pattern ./...: directory prefix . does not contain modules listed in
+      #   go.work or their selected dependencies
+      #
+      # The pattern has to name the modules, which go.work already lists. Read the
+      # list from the workspace file so adding a module cannot silently drop it
+      # from CI.
+      - name: list the workspace modules
+        id: mods
         run: |
-          echo "$(grep -c '^\s*\./' go.work) modules"
-          go work edit -json | head -40
+          set -euo pipefail
+          mods=$(go work edit -json | python3 -c \
+            'import json,sys; print(" ".join(u["DiskPath"].rstrip("/") + "/..." for u in json.load(sys.stdin)["Use"]))')
+          echo "modules: $(echo "$mods" | wc -w)"
+          echo "mods=$mods" >> "$GITHUB_OUTPUT"
 
-      - run: go vet ./...
+      - run: go vet ${{ steps.mods.outputs.mods }}
 
-      - run: go test ./...
+      - run: go test ${{ steps.mods.outputs.mods }}
 
-      - run: go build ./...
+      - run: go build ${{ steps.mods.outputs.mods }}
