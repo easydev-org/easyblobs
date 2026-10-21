@@ -30,6 +30,19 @@ PROTO="${1:?usage: ci-run.sh <protocol>}"
 : "${EASYBLOBS_ORIGIN:?EASYBLOBS_ORIGIN not set}"
 : "${EASYBLOBS_DATA:=/tmp/eb-data}"
 
+# FORBID any upstream proxy for the CLIENT. This is the single most important
+# isolation in this harness: if the client can reach the real registry through
+# a proxy (or a preconfigured mirror), it will, and the test passes without
+# easyblobs ever being exercised. That is exactly what happened to rubygems
+# and composer before this line existed: their logs said "Successfully
+# installed" while the data dir stayed at the empty-db size of 73728 bytes.
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
+export NO_PROXY="*"
+export no_proxy="*"
+# A few clients consult their own mirror variables; point them at the mount.
+export GOPROXY="$EASYBLOBS_ORIGIN/artifacts/go"
+export GOSUMDB=off
+
 # proto_mount mirrors e2e/run.sh: the /artifacts/<x> a protocol lives under.
 proto_mount() {
   case "$1" in

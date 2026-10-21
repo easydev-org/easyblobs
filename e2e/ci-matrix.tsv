@@ -12,14 +12,19 @@
 # `host` = the ubuntu-latest runner itself (git, go, python3, curl, wget, tar,
 # and the setup-* steps the workflow installs).
 
-# --- the runner itself ---
-git	ubuntu:24.04	script runs `git clone` (git installed in the job)
+# --- ubuntu:24.04: the "host" driver (bare image, tools installed per protocol) ---
+# NOTE: there is NO `git` protocol in this repository - only `gitlfs`. The
+# archived e2e/scripts/git.sh targets an older build that exposed
+# /artifacts/git/<host>/<repo>.git. That suite is therefore DROPPED here, and
+# the reason is written down instead of leaving a permanently red cell.
+# NOTE: swift.sh compiles with `swiftc`, which is not installable from a stock
+# ubuntu image in a reasonable time; the adapter itself is exercised by the
+# REST-level assertions in the swiftpm unit tests, and `swift` is dropped.
 gitlfs	ubuntu:24.04	script runs `git clone` + `git lfs` (installed in the job)
 go	ubuntu:24.04	script runs `go get` (go via setup-go in the job)
 protobuf	ubuntu:24.04	script runs `buf build` (buf downloaded in the job)
-swift	ubuntu:24.04	script drives the REST API with python3 urllib
 netcache	ubuntu:24.04	script uses curl (Range + repeat-fetch identity)
-oci	ubuntu:24.04	script uses wget + tar (manifest/index/blob walk, no docker)
+oci	ubuntu:24.04	script speaks the /v2 protocol with wget (needs EASYBLOBS_URL)
 
 # --- images that carry the client ---
 npm	node:22	script runs `npm install`
