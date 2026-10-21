@@ -17,7 +17,9 @@ name := "ivy-e2e"
 SBT
   cat > /tmp/ivyproj/project/plugins.sbt <<PLG
 resolvers += Resolver.url("easyblobs-ivy", url("$IVY_BASE/"))(Resolver.ivyStylePatterns)
-addSbtPlugin("com.typesafe.sbt" % "sbt-native-packager" % "0.7.4")
+# sbt 1.10 needs a modern plugin; 0.7.4 targets sbt 0.13 and silently fails to
+# resolve under this launcher. 1.9.16 is published at the same Ivy layout.
+addSbtPlugin("com.typesafe.sbt" % "sbt-native-packager" % "1.9.16")
 PLG
   cd /tmp/ivyproj
   # NOTE: no `| tail` on the command itself. Piping sbt into tail masks its exit
