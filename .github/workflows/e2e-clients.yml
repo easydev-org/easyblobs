@@ -297,10 +297,14 @@ jobs:
           #     stops with no further output.
           set +e
           denied=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
-            -x http://127.0.0.1:8888 "https://rubygems.org/" 2>/dev/null)
+            -x http://127.0.0.1:8888 "https://example.com/" 2>/dev/null)
           rc=$?
           set -e
-          echo "  via proxy, rubygems.org -> http=${denied:-none} rc=$rc"
+          # The probe host must be one that is NOT in ALLOWED_EGRESS - the point
+          # is to prove arbitrary egress is denied. Probing rubygems.org was
+          # wrong once its own upstream had to be allowed, and the check then
+          # aborted every driver with "the proxy is not blocking egress".
+          echo "  via proxy, example.com (not allowlisted) -> http=${denied:-none} rc=$rc"
           if [ "$rc" -eq 0 ] && [ "$denied" != "403" ]; then
             echo "FATAL: the proxy is not blocking egress (http=$denied)" >&2
             exit 1

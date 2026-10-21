@@ -80,12 +80,16 @@ if command -v curl >/dev/null; then
   # its non-zero exit must not end the script. Under `set -e` it did exactly
   # that, which silently killed every protocol before its suite ran.
   set +e
-  pub=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 https://rubygems.org/ 2>/dev/null)
+  # Probe a host that is deliberately NOT allowlisted: the question is whether
+  # the CLIENT can reach arbitrary internet, and every adapter's own upstream is
+  # now allowed *for the server*, so probing one of those would answer the wrong
+  # question.
+  pub=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 8 https://example.com/ 2>/dev/null)
   pub_rc=$?
   set -e
-  echo "  rubygems.org        -> http=${pub:-none} rc=$pub_rc"
+  echo "  example.com         -> http=${pub:-none} rc=$pub_rc"
   if [ "$pub_rc" -eq 0 ] && [ "$pub" != "403" ]; then
-    echo "  WARNING: rubygems.org is reachable directly; only the allowlist proxy prevents a bypass." >&2
+    echo "  WARNING: arbitrary egress works from the client; only the allowlist proxy prevents a bypass." >&2
   else
     echo "  egress blocked (as intended)"
   fi
