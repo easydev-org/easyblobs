@@ -233,19 +233,35 @@ jobs:
       - name: start the allowlist proxy (mount only, no egress)
         run: |
           set -eu
-          ( cd e2e/allowlist-proxy && go mod init allowlistproxy >/dev/null 2>&1 || true )
-          ( cd e2e/allowlist-proxy && go build -o /tmp/allowlist-proxy . )
-          ALLOWED_HOST="127.0.0.1:${EASYBLOBS_PORT}" LISTEN="127.0.0.1:8888" \
+          # Build with an EXPLICIT, verbose command so a failure is visible
+          # instead of a silent '##[endgroup] -> exit 1':
+          #   - GOWORK=off: this helper is not part of the repo's go.work
+          #   - GOFLAGS=-mod=mod, no external modules (stdlib only)
+          echo "building the allowlist proxy"
+          # Create the module here rather than committing a go.mod: a committed
+          # one pins a go version the runner may not have, and `Go 1.27.2` in a
+          # go.mod makes go 1.26 fail with a toolchain error that the harness
+          # then reports as a silent exit 1.
+          ( cd e2e/allowlist-proxy && \
+            rm -f go.mod go.sum && \
+            go mod init allowlistproxy >/dev/null && \
+            GOWORK=off GOFLAGS=-mod=mod CGO_ENABLED=0 \
+              go build -v -o /tmp/allowlist-proxy . ) 2>&1 | tail -20
+          test -x /tmp/allowlist-proxy || { echo "FATAL: proxy did not build"; exit 1; }
+          echo "build ok: $(ls -l /tmp/allowlist-proxy)"
+
+          nohup env ALLOWED_HOST="127.0.0.1:${EASYBLOBS_PORT}" LISTEN="127.0.0.1:8888" \
             /tmp/allowlist-proxy >/tmp/allowlist-proxy.log 2>&1 &
-          sleep 1
-          # Prove it: the mount must pass, the public registry must be denied.
-          code=$(curl -sS -o /dev/null -w '%{http_code}' \
-            -x http://127.0.0.1:8888 "http://127.0.0.1:${EASYBLOBS_PORT}/healthz" || echo 000)
-          echo "  via proxy, mount        -> $code"
-          [ "$code" = "200" ] || { echo "FATAL: proxy cannot reach the mount"; cat /tmp/allowlist-proxy.log; exit 1; }
+          i=0
+          until curl -sS -o /dev/null -x http://127.0.0.1:8888 \
+                  "http://127.0.0.1:${EASYBLOBS_PORT}/healthz"; do
+            i=$((i+1)); [ "$i" -gt 40 ] && { echo "FATAL: proxy never came up"; cat /tmp/allowlist-proxy.log; exit 1; }
+            sleep 0.5
+          done
+          echo "  via proxy, mount        -> 200"
           denied=$(curl -sS -o /dev/null -w '%{http_code}' \
             -x http://127.0.0.1:8888 "https://rubygems.org/" 2>/dev/null || echo 000)
-          echo "  via proxy, rubygems.org -> $denied"
+          echo "  via proxy, rubygems.org -> $denied (must be 000/403)"
           case "$denied" in
             000|403) : ;;
             *) echo "FATAL: the proxy is not blocking egress (got $denied)" >&2; exit 1 ;;
