@@ -27,5 +27,9 @@ mvn -B -q -s /tmp/settings-g.xml \
 
 aar=$(find "$M2" -name 'core-1.13.0.aar' | head -1)
 [ -n "$aar" ] || { echo "google: androidx core aar not in the local repository"; exit 1; }
-unzip -t "$aar" >/dev/null || { echo "google: the aar is not a valid zip"; exit 1; }
+# The aar must be an archive with a classes.jar inside - that is what the
+# Android build consumes. `unzip -t` reports "extra bytes" for some aar
+# variants, so test the CONTENT instead of the CRC table.
+unzip -l "$aar" 2>/dev/null | grep -q 'classes.jar' || {
+  echo "google: the aar does not contain classes.jar"; unzip -l "$aar" | head -5; exit 1; }
 echo "google: mvn resolved androidx.core:core:1.13.0 ($(wc -c <"$aar") bytes)"

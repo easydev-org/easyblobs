@@ -250,15 +250,13 @@ jobs:
             command -v bazel >/dev/null && echo "bazel: $(bazel --version 2>/dev/null | head -1)" || echo "WARNING: bazel not installed"
           fi
           if has hackage || has stackage; then
-            # cabal via ghcup (the non-interactive path).
+            # cabal from the distro. ghcup downloads a whole GHC toolchain
+            # (hundreds of MB) and did not finish in the job's budget; Debian's
+            # `cabal-install` is enough to drive the mirror.
             if ! command -v cabal >/dev/null; then
-              curl -fsSL https://get-ghcup.haskell.org -o /tmp/ghcup.sh
-              BOOTSTRAP_HASKELL_NONINTERACTIVE=1 \
-              BOOTSTRAP_HASKELL_MINIMAL=1 \
-              BOOTSTRAP_HASKELL_INSTALL_NO_STACK=1 \
-                sh /tmp/ghcup.sh >/dev/null 2>&1 || true
-              export PATH="$HOME/.ghcup/bin:$PATH"
-              [ -x "$HOME/.ghcup/bin/cabal" ] && ln -sf "$HOME/.ghcup/bin/cabal" /usr/local/bin/cabal || true
+              apt-get update -qq
+              DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cabal-install ghc >/dev/null || \
+                apt-get install -y -qq cabal-install >/dev/null || true
             fi
             command -v cabal >/dev/null && echo "cabal: $(cabal --version | head -1)" || echo "WARNING: cabal not installed"
           fi

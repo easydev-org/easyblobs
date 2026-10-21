@@ -14,6 +14,13 @@ cat > /tmp/settings-j.xml <<XML
   </mirrors>
 </settings>
 XML
+# A SNAPSHOT coordinate needs the timestamped version, which Maven resolves from
+# maven-metadata.xml. Ask for the POM first (that is what a build does), then
+# the jar for the resolved snapshot.
+mvn -B -q -s /tmp/settings-j.xml \
+  org.apache.maven.plugins:maven-dependency-plugin:3.6.1:get \
+  -Dartifact=com.github.jitpack:maven-simple:master-SNAPSHOT:pom -Dtransitive=false \
+  || true
 mvn -B -q -s /tmp/settings-j.xml \
   org.apache.maven.plugins:maven-dependency-plugin:3.6.1:get \
   -Dartifact=com.github.jitpack:maven-simple:master-SNAPSHOT -Dtransitive=false

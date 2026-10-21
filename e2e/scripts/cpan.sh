@@ -8,7 +8,7 @@ set -e
 : "${EASYBLOBS_BASE:?EASYBLOBS_BASE not set}"
 
 # Point CPAN/cpanm at the mirror only.
-mkdir -p /root/.cpan
+mkdir -p /root/.cpan/CPAN
 cat > /root/.cpan/CPAN/MyConfig.pm <<PM
 \$CPAN::Config = {
   'urllist' => ['$EASYBLOBS_BASE'],

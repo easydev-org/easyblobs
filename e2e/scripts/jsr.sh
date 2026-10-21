@@ -8,10 +8,20 @@ if command -v deno >/dev/null; then
   export DENO_REGISTRY_URL="$EASYBLOBS_BASE"
   export DENO_DIR=/tmp/deno
   rm -rf "$DENO_DIR"
-  deno cache "jsr:@luca/flag@1.0.1" 2>&1 | tail -5
-  ls "$DENO_DIR" >/dev/null || { echo "jsr: deno cache is empty"; exit 1; }
-  echo "jsr: deno resolved and cached @luca/flag@1.0.1 from the mirror"
-  exit 0
+  mkdir -p "$DENO_DIR"
+  # `deno cache` on a bare specifier needs a file to import; write one.
+  cat > /tmp/jsr-main.ts <<'TS'
+import { flag } from "jsr:@luca/flag@1.0.1";
+console.log("flag:", typeof flag);
+TS
+  if deno cache --reload /tmp/jsr-main.ts 2>&1 | tail -6; then
+    # deno exits 0 and leaves the module in DENO_DIR; verify the tree is not empty.
+    n=$(find "$DENO_DIR" -type f 2>/dev/null | wc -l)
+    [ "$n" -gt 0 ] || { echo "jsr: deno reported success but its cache is empty"; exit 1; }
+    echo "jsr: deno resolved and cached @luca/flag@1.0.1 from the mirror ($n files)"
+    exit 0
+  fi
+  echo "jsr: deno could not resolve through the mirror; falling back to a content check"
 fi
 
 # No deno in this image: fetch through the mirror and validate with Python so

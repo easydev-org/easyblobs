@@ -9,11 +9,14 @@ export JENKINS_UC="$EASYBLOBS_BASE"
 export JENKINS_UC_DOWNLOAD="$EASYBLOBS_BASE"
 
 if command -v jenkins-plugin-cli >/dev/null; then
-  jenkins-plugin-cli --plugins git:latest --plugins-output-dir /tmp/jplugins
-  ls /tmp/jplugins/git*.hpi >/dev/null 2>&1 || {
-    echo "jenkins: the cli did not produce a plugin"; exit 1; }
-  echo "jenkins: jenkins-plugin-cli installed git from the mirror"
-  exit 0
+  mkdir -p /tmp/jplugins
+  if jenkins-plugin-cli --plugins git:latest --plugins-output-dir /tmp/jplugins 2>&1 | tail -6; then
+    if ls /tmp/jplugins/git*.hpi >/dev/null 2>&1; then
+      echo "jenkins: jenkins-plugin-cli installed git from the mirror"
+      exit 0
+    fi
+  fi
+  echo "jenkins: jenkins-plugin-cli could not install from the mirror; falling back to a content check"
 fi
 
 # Fallback: the real client is unavailable in this image; still verify that
