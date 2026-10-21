@@ -28,11 +28,19 @@ func (s *State) conans(w http.ResponseWriter, r *http.Request, path string) {
 	// /conans/{name}/{ver}/{user}/{channel}/revisions[...]
 	_ = user
 	_ = channel
-	// Pull-through: a recipe with nothing cached locally is served straight
-	// from the upstream (center2) so a client can discover its revisions and
-	// fetch recipe files. Package sub-paths keep their own handling below.
+	// Pull-through for METADATA ONLY (revisions, latest, listing): a recipe with
+	// nothing cached locally is answered straight from the upstream so the
+	// client can discover its revisions.
+	//
+	// It must NOT swallow file downloads. This condition used to cover every
+	// non-package GET, so `/revisions/<rev>/files/conanfile.py` was proxied and
+	// nothing was ever stored - a client pulled a recipe, the mirror kept
+	// nothing, and the next pull went upstream again. File GETs fall through to
+	// fileGet, which now caches on read.
 	if (r.Method == http.MethodGet || r.Method == http.MethodHead) &&
-		!strings.Contains(rest, "/packages/") && !s.recipeKnown(r.Context(), name, ver) {
+		!strings.Contains(rest, "/packages/") &&
+		!strings.Contains(rest, "/files/") &&
+		!s.recipeKnown(r.Context(), name, ver) {
 		s.proxyRecipe(w, r, path)
 		return
 	}
