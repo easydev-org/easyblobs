@@ -38,6 +38,25 @@ jobs:
           go-version-file: go.work
           cache: true
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # system/ui.go has `//go:embed all:ui/dist`, and that dist/ is produced by
+      # Containerfile.build from easyblobs-webui — nothing is committed. Every go
+      # command in the `system` module fails until it exists:
+      #   system/ui.go:15:12: pattern all:ui/dist: no matching files found
+      - name: build the embedded SPA
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch main \
+            https://github.com/easydev-org/easyblobs-webui.git /tmp/webui
+          cd /tmp/webui
+          npm ci --no-audit --no-fund
+          mkdir -p "$GITHUB_WORKSPACE/system/ui/dist"
+          OUT_DIR="$GITHUB_WORKSPACE/system/ui/dist" npm run build
+          echo "SPA files: $(find "$GITHUB_WORKSPACE/system/ui/dist" -type f | wc -l)"
+
       # `./...` DOES NOT WORK HERE. The workspace root is not itself a module, so
       # the pattern walks out of the workspace:
       #   pattern ./...: directory prefix . does not contain modules listed in
