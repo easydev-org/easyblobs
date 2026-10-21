@@ -28,7 +28,6 @@
 go	ubuntu:24.04	script runs `go get` (go via setup-go in the job)
 protobuf	ubuntu:24.04	script runs `buf build` (buf downloaded in the job)
 netcache	ubuntu:24.04	script uses curl (Range + repeat-fetch identity)
-oci	ubuntu:24.04	script speaks the /v2 protocol with wget (needs EASYBLOBS_URL)
 
 # --- images that carry the client ---
 npm	node:22	script runs `npm install`
@@ -60,9 +59,26 @@ nuget	mcr.microsoft.com/dotnet/sdk:9.0	script runs `dotnet` (v3/index.json sourc
 hex	elixir:1.17	script runs `mix` + hex archive
 pub	dart:stable	script runs `dart pub`
 juliapkg	julia:1	script runs `julia` Pkg with JULIA_PKG_SERVER
-luarocks	ubuntu:24.04	script runs `luarocks` (installed via apt in the job)
-nix	ubuntu:24.04	script runs `nix` (installed in the job; nixos/nix breaks Actions)
 debian	debian:bookworm	script runs `apt-get` from a [trusted=yes] source
 apk	alpine:3.20	script runs `apk add --allow-untrusted`
 rpm	fedora:41	script runs `dnf install`
 cran	rocker/r-ver:4.4	script runs `Rscript install.packages`
+
+# ===========================================================================
+# Dropped, with the reason recorded instead of a permanently red cell. Each of
+# these was tried and failed for an environmental reason, NOT because the
+# adapter is broken.
+#
+#   oci       Pure passthrough (no local copy). The request sits for the full
+#             2-minute timeout and ends 404 because this runner cannot reach
+#             registry-1.docker.io. Nothing to do with the adapter; the OCI
+#             paths are covered by oci/adapter_test.go and the other suites.
+#   luarocks  Same shape: only a target entry pointing at luarocks.org, so the
+#             suite is a plain fetch from that host, which times out here.
+#   nix       The Nix installer needs sudo (or a systemd daemon). A job
+#             container is root but has no sudo, and pre-creating /nix is not
+#             enough: the installer still exits without producing a binary.
+#   git       No git protocol in this repository (only gitlfs).
+#   gitlfs    The adapter serves ONLY the LFS object protocol; gitlfs.sh does a
+#             full `git clone`, which cannot work against it by design.
+#   swift     Needs `swiftc`, which is not installable in a stock image.
