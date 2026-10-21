@@ -134,6 +134,15 @@ func (s *State) tarballURLCtx(r *http.Request, name, version string) string {
 	if sc := easyblobkit.RepoScopeFrom(r.Context()); sc.Explicit && sc.Namespace != "" {
 		base += "/-/" + sc.Namespace
 	}
+	// Preserve an explicit "/_upstream/<host>/" segment. The packument for
+	// @jsr/* packages comes from a named target (npm.jsr.io); if the tarball
+	// URL drops that segment the client asks the DEFAULT npm upstream for the
+	// bytes, which is a different repository entirely - and in an isolated
+	// deployment that request simply fails. The scope records the host, so
+	// re-emit it here.
+	if sc := easyblobkit.RepoScopeFrom(r.Context()); sc.Upstream != "" {
+		base += "/_upstream/" + sc.Upstream
+	}
 	return base + "/" + encodeName(name) + "/-/" + tarballFilename(name, version)
 }
 

@@ -299,8 +299,16 @@ X
         conan profile detect --force >/dev/null 2>&1 || true
         conan remote add easy-platform "$EASYBLOBS_BASE" --force >/dev/null 2>&1 || true
         conan download zlib/1.3.1 -r easy-platform --only-recipe
-        # The recipe dir must now exist in the local cache: that IS the pull.
-        find "$CONAN_HOME" -maxdepth 6 -type d -name 'zlib' | head -1 | grep -q . || exit 1
+        # Ask conan itself instead of guessing the cache layout: 'conan list'
+        # prints the recipes the LOCAL cache holds, which is precisely what
+        # 'download' is supposed to have produced. (A hard-coded
+        # `find ... -name zlib` guessed wrong - conan 2 stores recipes under
+        # <home>/p/b/... and the name is hashed.)
+        if ! conan list 'zlib/1.3.1:*' 2>/dev/null | grep -q 'zlib/1.3.1'; then
+          echo "FAIL: conan list does not show zlib/1.3.1 in the local cache" >&2
+          conan list 'zlib/1.3.1:*' 2>&1 | head -20 >&2 || true
+          exit 1
+        fi
         echo "conan: recipe present in the client cache"
         return 0
       fi
