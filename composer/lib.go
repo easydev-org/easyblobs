@@ -7,11 +7,13 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/easydev-org/easyblobs/core"
 )
@@ -247,7 +249,18 @@ func (s *State) rewriteDist(full string, body []byte) []byte {
 			dist = map[string]any{"type": "zip"}
 			entry["dist"] = dist
 		}
-		dist["url"] = base + "/dist/" + full + "/" + easyblobkit.URLencode(version) + "/" + version + ".zip"
+		// Point dist.url at this mirror, keeping the ORIGINAL url so the proxy
+		// can fetch it. Packagist does not host the archives: its dist.url is
+		// https://api.github.com/repos/<owner>/<repo>/zipball/<sha>, so
+		// forwarding "<packagist>/dist/<name>/<version>/<ref>" to packagist is a
+		// 404 - the bytes live on github.com. The original URL therefore travels
+		// base64url-encoded as the last path segment.
+		origURL, _ := dist["url"].(string)
+		if origURL == "" {
+			continue
+		}
+		dist["url"] = base + "/dist/" + full + "/" + easyblobkit.URLencode(version) +
+			"/" + easyblobkit.URLencode(base64.RawURLEncoding.EncodeToString([]byte(origURL))) + ".zip"
 		changed = true
 	}
 	if !changed {
@@ -258,6 +271,24 @@ func (s *State) rewriteDist(full string, body []byte) []byte {
 		return body
 	}
 	return out
+}
+
+// decodeDistRef reverses the encoding rewriteDist applies to dist.url:
+// the last path segment is base64url(original upstream url) + ".zip".
+//
+// It returns ok=false for anything that is not such an encoded URL (a plain
+// reference, a hand-written path), so legacy URLs keep working.
+func decodeDistRef(seg string) (string, bool) {
+	seg = strings.TrimSuffix(seg, ".zip")
+	raw, err := base64.RawURLEncoding.DecodeString(seg)
+	if err != nil {
+		return "", false
+	}
+	u := string(raw)
+	if !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "http://") {
+		return "", false
+	}
+	return u, true
 }
 
 func (s *State) provider(w http.ResponseWriter, r *http.Request, rest string) {
@@ -313,15 +344,62 @@ func (s *State) dist(w http.ResponseWriter, r *http.Request, rest string) {
 			}
 		}
 	}
-	// Stream the dist zip into the CAS (no full buffering of a large archive).
+	// The last segment is the base64url-encoded ORIGINAL upstream url (that is
+	// what rewriteDist advertises), because Packagist does NOT host the
+	// archives - its dist.url points at api.github.com. Forwarding
+	// "<packagist>/dist/<name>/<version>/<ref>" to Packagist is a guaranteed
+	// 404, so the original URL is decoded and fetched directly.
+	if orig, ok := decodeDistRef(ref); ok {
+		s.fetchDistFromURL(w, r, full, version, filename, orig)
+		return
+	}
+	// A plain reference (hand-written or legacy URL) keeps the historical
+	// behaviour and is forwarded to the packagist origin.
 	br := s.Registry.FetchToBlobResult(r.Context(), "composer", "/dist/"+full+"/"+version+"/"+ref)
 	if !br.OK {
 		easyblobkit.WriteBlobResultError(w, br)
 		return
 	}
-	digest, size := br.Digest, br.Size
-	storeVersionBlob(s.Registry, full, version, filename, digest, size, "pull", r.Context())
-	if easyblobkit.ServeBlobAtNamed(w, r, s.Registry.Blobs, r.Context(), digest, "application/octet-stream", filename) {
+	storeVersionBlob(s.Registry, full, version, filename, br.Digest, br.Size, "pull", r.Context())
+	if easyblobkit.ServeBlobAtNamed(w, r, s.Registry.Blobs, r.Context(), br.Digest, "application/octet-stream", filename) {
+		return
+	}
+	easyblobkit.Error(w, http.StatusBadGateway, "cache error")
+}
+
+// fetchDistFromURL downloads a composer dist archive from an ARBITRARY upstream
+// url (packagist publishes api.github.com zipball links, so the origin in the
+// metadata is not the mirror's own upstream), streams it into the CAS and
+// serves it. The bytes are recorded against <name>/<version> so later requests
+// are answered from the CAS without touching the origin.
+func (s *State) fetchDistFromURL(w http.ResponseWriter, r *http.Request, full, version, filename, orig string) {
+	if !strings.HasPrefix(orig, "https://") && !strings.HasPrefix(orig, "http://") {
+		easyblobkit.Error(w, http.StatusBadRequest, "dist url must be http(s)")
+		return
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, orig, nil)
+	if err != nil {
+		easyblobkit.Error(w, http.StatusBadGateway, "dist request")
+		return
+	}
+	req.Header.Set("User-Agent", "easyblobs-composer-mirror")
+	res, err := (&http.Client{Timeout: 300 * time.Second}).Do(req)
+	if err != nil {
+		easyblobkit.Error(w, http.StatusBadGateway, "dist fetch")
+		return
+	}
+	defer func() { _ = res.Body.Close() }()
+	if res.StatusCode < 200 || res.StatusCode > 299 {
+		easyblobkit.Error(w, http.StatusBadGateway, "dist upstream "+res.Status)
+		return
+	}
+	stored, err := s.Registry.StoreStream(r.Context(), res.Body)
+	if err != nil {
+		easyblobkit.Error(w, http.StatusBadGateway, "dist store")
+		return
+	}
+	storeVersionBlob(s.Registry, full, version, filename, stored.Digest, stored.Size, "pull", r.Context())
+	if easyblobkit.ServeBlobAtNamed(w, r, s.Registry.Blobs, r.Context(), stored.Digest, "application/octet-stream", filename) {
 		return
 	}
 	easyblobkit.Error(w, http.StatusBadGateway, "cache error")
