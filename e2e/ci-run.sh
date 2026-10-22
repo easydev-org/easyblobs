@@ -375,6 +375,10 @@ fixture_dir_for_protocol() {
     nuget)     echo dotnet ;;
     protobuf)  echo buf ;;
     pypi)      echo python ;;
+    # The PROTOCOL is npm; the fixture directory is node (the toolchain). The
+    # npm adapter only strips an "/artifacts/npm" prefix, so a mount named
+    # "/artifacts/node" misses the strip and every publish 404s.
+    npm)       echo node ;;
     *)         echo "$1" ;;
   esac
 }

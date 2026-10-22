@@ -408,7 +408,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - protocol: node
+          # The PROTOCOL is npm (the mount path and the name in
+          # e2e/ci-matrix.tsv); node is the fixture directory, and
+          # fixture_dir_for_protocol() maps npm -> node.
+          - protocol: npm
             tools: "node-26"
           # The PROTOCOL is pypi (that is the mount's path and the name in
           # e2e/ci-matrix.tsv); python is only the fixture directory, and
