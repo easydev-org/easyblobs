@@ -355,12 +355,33 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 # nothing is lost while coverage is being migrated.
 # ---------------------------------------------------------------------------
 FIXTURE_DIR=""
+# A protocol name and a fixture directory are not always the same word: the
+# protocol is the WIRE FORMAT (maven, rubygems, nuget, hex), while the fixture is
+# the TOOLCHAIN (java, ruby, dotnet, elixir). Without this map only the protocols
+# whose two names happen to match would ever use a fixture.
+fixture_dir_for_protocol() {
+  case "$1" in
+    maven|gradle|google|clojars|spring|jitpack|ivy) echo java ;;
+    rubygems)  echo ruby ;;
+    nuget)     echo dotnet ;;
+    hex)       echo elixir ;;
+    cpan)      echo perl ;;
+    cran)      echo r ;;
+    jsrnpm|jsr) echo node ;;
+    protobuf)  echo buf ;;
+    pypi|huggingface) echo python ;;
+    *)         echo "$1" ;;
+  esac
+}
+
 fixture_for() { # fixture_for <protocol> ; echoes a directory or nothing
   _root="${E2E_FIXTURES:-}"
   [ -n "$_root" ] || return 1
-  [ -d "$_root/$1" ] || return 1
-  [ -f "$_root/$1/publish.sh" ] || return 1
-  printf '%s\n' "$_root/$1"
+  _dir=$(fixture_dir_for_protocol "$1")
+  [ -n "$_dir" ] || return 1
+  [ -d "$_root/$_dir" ] || return 1
+  [ -f "$_root/$_dir/publish.sh" ] || return 1
+  printf '%s\n' "$_root/$_dir"
 }
 
 # Several suites used to write to a hard-coded /w, which works in a container
