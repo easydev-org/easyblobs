@@ -1,98 +1,66 @@
-# ci-matrix.tsv — every REAL e2e suite, and the driver that can run it.
+# ci-matrix.tsv — every REAL e2e suite, and how its client is provided.
 #
-# Columns: protocol <TAB> driver <TAB> why
+# Columns: protocol <TAB> runner <TAB> why
 #
-# One CI job per driver: pull the image once, run every protocol assigned to it.
-# e2e/genmatrix.py turns this file into the workflow matrix, so adding a
-# protocol is a one-line change HERE and nothing else.
+# runner is one of:
 #
-# The driver is chosen from what the script ACTUALLY invokes (verified by
-# reading each e2e/scripts/<p>.sh), not from the protocol's name.
+#   ubuntu-latest   the client is installed with a GitHub Action (or is already
+#                   on the runner). ONE job per protocol, so the install steps
+#                   are `if:`-guarded and only the needed toolchain is set up.
+#                   This is the default and covers every application-level
+#                   client.
 #
-# `host` = the ubuntu-latest runner itself (git, go, python3, curl, wget, tar,
-# and the setup-* steps the workflow installs).
+#   container:<image>
+#                   ONLY for the distro package managers. `apk` is Alpine's
+#                   package manager and does not exist on Ubuntu; `apt`/`dnf`
+#                   on Ubuntu would test THIS image's package handling against
+#                   a foreign distro's repository, which is the wrong subject.
+#                   These three genuinely require the distro userland they are
+#                   testing, so they keep a job container.
 
-# --- ubuntu:24.04: the "host" driver (bare image, tools installed per protocol) ---
-# NOTE: there is NO `git` protocol in this repository - only `gitlfs`. The
-# archived e2e/scripts/git.sh targets an older build that exposed
-# /artifacts/git/<host>/<repo>.git. That suite is therefore DROPPED here, and
-# the reason is written down instead of leaving a permanently red cell.
-# NOTE: swift.sh compiles with `swiftc`, which is not installable from a stock
-# ubuntu image in a reasonable time; the adapter itself is exercised by the
-# REST-level assertions in the swiftpm unit tests, and `swift` is dropped.
-# NOTE: gitlfs.sh does a full `git clone`, but this repository's gitlfs adapter
-# serves ONLY the LFS object protocol (/info/lfs/objects/batch and
-# /objects/<oid>); it has no git transport at all. The clone cannot work
-# against it by design, so the suite is dropped. (The object protocol itself is
-# covered by gitlfs/lib_test.go.)
-go	ubuntu:24.04	script runs `go get` (go via setup-go in the job)
-protobuf	ubuntu:24.04	script runs `buf build` (buf downloaded in the job)
-netcache	ubuntu:24.04	script uses curl (Range + repeat-fetch identity)
+# --- application-level clients: installed with actions on ubuntu-latest ---
 
-# --- images that carry the client ---
-npm	node:22	script runs `npm install`
-jsrnpm	node:22	script runs `npm install` against the npm-compatible packument
-jsr	node:22	script runs `deno cache` against the JSR registry
-pypi	python:3.12	script runs `pip install`
-huggingface	python:3.12	script runs `pip install` + huggingface_hub
-conan	python:3.12	script runs `conan` (installed via pip in the job)
-helm	alpine/helm:3.16	script runs `helm repo add` / `pull` / `template`
-cargo	rust:1	script runs `cargo` with a crates-io source replacement
-rubygems	ruby:3.3	script runs `gem install`
-composer	composer:2	script runs `composer require` + php
-maven	maven:3.9-eclipse-temurin-21	script runs `mvn`
-# --- one image per real client toolchain ---
-#
-# These used to share `gradle:8-jdk21` because every suite was a wget probe.
-# Now that each drives the REAL client, each needs the toolchain that client
-# belongs to: mvn, sbt, bazel, cabal, opam, cpanm, pecl, jenkins-plugin-cli.
-gradle	maven:3.9-eclipse-temurin-21	script runs `mvn dependency:get`
-google	maven:3.9-eclipse-temurin-21	script runs `mvn dependency:get` for an aar
-clojars	maven:3.9-eclipse-temurin-21	script runs `mvn dependency:get` (Clojars layout)
-spring	maven:3.9-eclipse-temurin-21	script runs `mvn dependency:get` (milestone)
-jitpack	maven:3.9-eclipse-temurin-21	script runs `mvn dependency:get` (SNAPSHOT)
-# sbt / bazel / cabal / cpanm / opam / pecl / jenkins-plugin-cli are installed
-# into a plain ubuntu image (see the workflow) instead of pulling one image per
-# toolchain: several of the obvious images do not exist under those names, and
-# a job container whose /__w perms differ breaks the runner's own state files
-# (EACCES on save_state). One Debian base keeps the runner happy.
-ivy	ubuntu:24.04	sbt installed in the job; runs `sbt update` against the Ivy repo
-bazel	ubuntu:24.04	bazelisk installed in the job; runs `bazel mod graph` via the BCR
-hackage	ubuntu:24.04	ghcup+cabal installed in the job; runs `cabal get`
-stackage	ubuntu:24.04	cabal installed in the job; parses the snapshot config
-cpan	ubuntu:24.04	cpanm installed in the job; runs `cpanm DBI`
-opam	ubuntu:24.04	opam installed in the job; runs `opam init` against the mirror
-pecl	ubuntu:24.04	php+pecl installed in the job; runs `pecl download`
-jenkins	ubuntu:24.04	jenkins-plugin-cli installed in the job
-conda	continuumio/miniconda3	script runs `conda create` / `conda run`
-nuget	mcr.microsoft.com/dotnet/sdk:9.0	script runs `dotnet` (v3/index.json source)
-hex	elixir:1.17	script runs `mix` + hex archive
-pub	dart:stable	script runs `dart pub`
-juliapkg	julia:1	script runs `julia` Pkg with JULIA_PKG_SERVER
-debian	debian:bookworm	script runs `apt-get` from a [trusted=yes] source
-apk	alpine:3.20	script runs `apk add --allow-untrusted`
-rpm	fedora:41	script runs `dnf install`
-cran	rocker/r-ver:4.4	script runs `Rscript install.packages`
+npm	ubuntu-latest	npm via actions/setup-node
+jsrnpm	ubuntu-latest	npm via actions/setup-node (JSR's npm-compatible packument)
+jsr	ubuntu-latest	deno via denoland/setup-deno
+pypi	ubuntu-latest	pip via actions/setup-python
+huggingface	ubuntu-latest	pip + huggingface_hub (installed by the suite)
+conan	ubuntu-latest	conan via pip (installed in the job)
+cargo	ubuntu-latest	cargo via dtolnay/rust-toolchain
+go	ubuntu-latest	go via actions/setup-go
+maven	ubuntu-latest	mvn via actions/setup-java
+gradle	ubuntu-latest	mvn via actions/setup-java
+google	ubuntu-latest	mvn via actions/setup-java
+clojars	ubuntu-latest	mvn via actions/setup-java
+spring	ubuntu-latest	mvn via actions/setup-java
+jitpack	ubuntu-latest	mvn via actions/setup-java
+ivy	ubuntu-latest	Apache Ivy (jar fetched in the job) on actions/setup-java
+bazel	ubuntu-latest	bazel via bazel-contrib/setup-bazel
+helm	ubuntu-latest	helm via azure/setup-helm
+rubygems	ubuntu-latest	gem via ruby/setup-ruby
+composer	ubuntu-latest	composer + php via ramsey/composer-install / setup-php
+hex	ubuntu-latest	mix via erlef/setup-beam
+pub	ubuntu-latest	dart via dart-lang/setup-dart
+juliapkg	ubuntu-latest	julia via julia-actions/setup-julia
+hackage	ubuntu-latest	cabal via haskell-actions/setup
+stackage	ubuntu-latest	cabal via haskell-actions/setup
+opam	ubuntu-latest	opam via ocaml/setup-ocaml
+pecl	ubuntu-latest	pecl via shivammathur/setup-php
+cpan	ubuntu-latest	cpanm via shogo82148/actions-setup-perl
+nix	ubuntu-latest	nix via cachix/install-nix-action
+luarocks	ubuntu-latest	luarocks via leafo/gh-actions-luarocks
+nuget	ubuntu-latest	dotnet via actions/setup-dotnet
+conda	ubuntu-latest	conda via conda-incubator/setup-miniconda
+protobuf	ubuntu-latest	buf via bufbuild/buf-setup-action
+cran	ubuntu-latest	R via r-lib/actions/setup-r
+swift	ubuntu-latest	swiftc via swift-actions/setup-swift
+jenkins	ubuntu-latest	jenkins-plugin-cli (jar fetched in the job) + setup-java
 
-# --- protocols that need their own distro/toolchain image ---
-#
-# These five were previously parked here with "environmental" excuses. They are
-# back in the matrix: each one only needed the RIGHT image, not a workaround.
-#
-#   oci       ubuntu:24.04 + wget/tar speaks /v2 itself (no docker/dockerd).
-#   luarocks  needs the luarocks CLI, which alpine has as a package.
-#   nix       needs a real Nix install; the official installer refuses without
-#             sudo, so use an image that SHIPS nix (see the nix-driver notes).
-#   gitlfs    needs the git-lfs binary; the adapter serves LFS objects, and the
-#             suite is adapted to that protocol (no full clone required).
-#   swift     needs a Swift toolchain; the official swift image has swiftc.
-oci	ubuntu:24.04	script speaks the /v2 protocol with wget (needs EASYBLOBS_URL)
-luarocks	alpine:3.20	script runs `luarocks` (apk-installed in the job)
-nix	ubuntu:24.04	official Nix tarball unpacked in the job (nixos/nix breaks Actions)
-gitlfs	alpine:3.20	script drives the LFS object protocol with git + git-lfs
-swift	swift:6.0	official Swift image ships swiftc
+# --- distro package managers: these NEED their own userland ---
+apk	container:alpine:3.20	apk(8) exists only on Alpine
+debian	container:debian:bookworm	apt tests THIS distro's archive layout
+rpm	container:fedora:41	dnf tests THIS distro's repomd metadata
 
-# NOTE: `git` is intentionally absent. This repository has no git protocol at
-# all (only `gitlfs`), so e2e/scripts/git.sh targets an older build that served
-# /artifacts/git/<host>/<repo>.git. It is not "dropped for now" - there is no
-# server-side endpoint for it to exercise.
+# --- protocols whose client is plain HTTP by nature ---
+netcache	ubuntu-latest	curl IS the client (raw HTTP cache semantics)
+oci	ubuntu-latest	wget speaks the OCI /v2 protocol (no docker daemon needed)

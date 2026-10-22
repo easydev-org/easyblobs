@@ -1,61 +1,86 @@
 #!/usr/bin/env python3
-"""genmatrix.py — turn e2e/ci-matrix.tsv into a GitHub Actions matrix.
+"""genmatrix.py - turn e2e/ci-matrix.tsv into the two GitHub Actions matrices.
 
-Reads the TSV (protocol <TAB> driver <TAB> why) and groups the protocols by
-driver, so one CI job pulls one container image and runs every protocol that
-image can drive.
+The TSV is the single source of truth (protocol <TAB> runner <TAB> why). A
+runner is either:
 
-Prints {"include": [{"driver": ..., "protocols": "a b c"}, ...]} on stdout
-(a GitHub matrix body) and a one-line summary on stderr.
+    ubuntu-latest        the client is installed by a GitHub Action on the
+                         runner, so the protocol gets its own job there.
+    container:<image>    the client needs that distro's userland (the three
+                         distro package managers), so the job keeps a container.
+
+Two matrices are produced because the two job shapes differ:
+
+    --app      {"protocol": ["npm", "pypi", ...]}     one job per protocol
+    --distro   {"include": [{"protocol": .., "image": ..}, ...]}
 
 ONLY=a,b restricts the run to those protocols (used by the workflow_dispatch
-input so a single failing protocol can be retried without the whole matrix).
+input so one failing protocol can be retried without the whole matrix).
 """
 
-import collections
 import json
 import os
 import sys
 
+TSV = "e2e/ci-matrix.tsv"
 
-def main() -> int:
+
+def rows():
+    """Yield (protocol, runner) pairs, failing loudly on a malformed row.
+
+    A silently dropped protocol is how a suite quietly stops covering
+    something, so every problem here is an error, not a skip.
+    """
     only = {p.strip() for p in os.environ.get("ONLY", "").split(",") if p.strip()}
-    by_driver: dict[str, list[str]] = collections.OrderedDict()
-    skipped: list[str] = []
-
-    for raw in open("e2e/ci-matrix.tsv", encoding="utf-8"):
+    seen = set()
+    for raw in open(TSV, encoding="utf-8"):
         line = raw.split("#", 1)[0].strip()
         if not line:
             continue
         parts = line.split("\t")
         if len(parts) < 2:
-            # A malformed row must be loud: silently dropping a protocol is how
-            # a suite quietly stops covering something.
-            print(f"genmatrix: malformed row (need protocol<TAB>driver): {raw!r}", file=sys.stderr)
-            return 2
-        proto, driver = parts[0].strip(), parts[1].strip()
-        if not proto or not driver:
-            print(f"genmatrix: empty protocol or driver in row: {raw!r}", file=sys.stderr)
-            return 2
+            raise SystemExit(f"genmatrix: malformed row (need protocol<TAB>runner): {raw!r}")
+        proto, runner = parts[0].strip(), parts[1].strip()
+        if not proto or not runner:
+            raise SystemExit(f"genmatrix: empty protocol or runner: {raw!r}")
+        if proto in seen:
+            raise SystemExit(f"genmatrix: duplicate protocol {proto!r}")
+        seen.add(proto)
         if only and proto not in only:
-            skipped.append(proto)
             continue
-        by_driver.setdefault(driver, []).append(proto)
-
+        yield proto, runner
     if only:
-        unknown = only - {p for ps in by_driver.values() for p in ps}
+        unknown = only - seen
         if unknown:
-            print(f"genmatrix: ONLY names unknown protocol(s): {sorted(unknown)}", file=sys.stderr)
-            return 2
+            raise SystemExit(f"genmatrix: ONLY names unknown protocol(s): {sorted(unknown)}")
 
-    include = [{"driver": d, "protocols": " ".join(ps)} for d, ps in by_driver.items()]
-    print(json.dumps({"include": include}))
-    total = sum(len(ps) for ps in by_driver.values())
-    print(
-        f"genmatrix: {total} protocol(s) across {len(include)} driver(s)"
-        + (f"; skipped {len(skipped)}" if skipped else ""),
-        file=sys.stderr,
-    )
+
+def main():
+    mode = sys.argv[1] if len(sys.argv) > 1 else "--app"
+    app, distro = [], []
+    for proto, runner in rows():
+        if runner.startswith("container:"):
+            image = runner.split(":", 1)[1].strip()
+            if not image:
+                raise SystemExit(f"genmatrix: container row without an image: {proto}")
+            distro.append({"protocol": proto, "image": image})
+        elif runner == "ubuntu-latest":
+            app.append(proto)
+        else:
+            raise SystemExit(
+                f"genmatrix: unknown runner {runner!r} for {proto!r} "
+                f"(expected ubuntu-latest or container:<image>)"
+            )
+
+    if mode == "--app":
+        print(json.dumps({"protocol": app}))
+    elif mode == "--distro":
+        print(json.dumps({"include": distro}))
+    else:
+        raise SystemExit(f"usage: genmatrix.py --app|--distro (got {mode!r})")
+
+    print(f"genmatrix: {len(app)} app protocol(s), {len(distro)} distro protocol(s)",
+          file=sys.stderr)
     return 0
 
 

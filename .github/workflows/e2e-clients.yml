@@ -1,20 +1,26 @@
 name: e2e-clients
 
-# Run every REAL e2e suite (e2e/scripts/*.sh) against a locally started
-# easyblobs, on GitHub CI — NOT on a developer machine.
+# Run every REAL e2e suite against a locally started easyblobs, on GitHub CI.
 #
-# One job per DRIVER (the container that carries the client tool), so a single
-# image is pulled once and all its protocols run in it. The driver/protocol
-# mapping lives in e2e/ci-matrix.tsv so adding a protocol is a one-line change
-# there, not in this file.
+# ARCHITECTURE (one job per protocol):
 #
-# The server runs INSIDE the job container, next to the client. That is simpler
-# and avoids a real Actions limitation: the runner already starts the job
-# container with its own --network github_network_..., so adding
-# `options: --network host` makes `docker create` fail with exit 125 ("Value
-# cannot be null. (Parameter 'ContainerId')") before any step runs.
-# Because both processes share the container's network namespace, 127.0.0.1
-# works and nothing extra is needed.
+#   clients        ubuntu-latest, the client installed by a GitHub ACTION. Each
+#                  step is `if:`-guarded on the protocol, so a job installs only
+#                  the one toolchain it needs. This covers every
+#                  application-level client (npm, pip, gem, cargo, mvn, cabal,
+#                  opam, php/pecl, perl, deno, bazel, nix, lua, dotnet, conda,
+#                  buf, R, swift, mix, dart, julia, helm, go).
+#
+#   distro-clients the three DISTRO package managers, which need their own
+#                  userland and cannot be driven from Ubuntu:
+#                    apk     apk(8) only exists on Alpine
+#                    debian  apt must test Debian's own archive layout
+#                    rpm     dnf must test Fedora's own repomd metadata
+#                  Running apt/dnf on Ubuntu against a foreign repository would
+#                  test the wrong subject, so these keep a container.
+#
+# Tool versions live in the `env:` block below so they are one place, not
+# scattered through the steps.
 
 on:
   push:
@@ -30,22 +36,34 @@ on:
 permissions:
   contents: read
 
-# NOTE on the shell: steps run with `sh` (the default) rather than forcing bash,
-# because the minimal drivers (alpine, nix) have no bash until they install it.
-# Instead the job's FIRST step installs bash, and every later step that needs
-# bash-isms (`set -o pipefail`) asks for it explicitly with `shell: bash`.
-# Background: node:22/maven/ubuntu:24.04 default to dash, where a bare
-# `set -eu` aborts with "Illegal option -o pipefail" - that silently
-# killed whole driver jobs before any test ran.
-
 env:
   CGO_ENABLED: "0"
   EASYBLOBS_PORT: "8080"
+  # Pinned tool versions. Pinned (not `latest`) so a run that goes red means a
+  # code problem, not an upstream release; bump these deliberately.
+  GO_VERSION_FILE: go.work
+  NODE_VERSION: "22"
+  PYTHON_VERSION: "3.12"
+  JAVA_VERSION: "21"
+  DOTNET_VERSION: "9.0.x"
+  RUBY_VERSION: "3.3"
+  DENO_VERSION: "v2.x"
+  HELM_VERSION: "v3.16.4"
+  BUF_VERSION: "1.47.2"
+  SWIFT_VERSION: "6.0"
+  R_VERSION: "4.4"
+  OCAML_VERSION: "5.2"
+  PHP_VERSION: "8.4"
+  PERL_VERSION: "5.40"
+  HASKELL_GHC: "9.8"
+  JULIA_VERSION: "1"
+  BAZEL_VERSION: "8.0.1"
+  JENKINS_PLUGIN_MANAGER: "2.12.15"
+  SBT_RUNNER_VERSION: "1.10.7"
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Build the server ONCE and share the binary: every protocol job then only
-  # starts it, which keeps the matrix cheap.
+  # Build the server once and share the binary.
   # ---------------------------------------------------------------------------
   server:
     runs-on: ubuntu-latest
@@ -67,40 +85,41 @@ jobs:
           retention-days: 1
 
   # ---------------------------------------------------------------------------
-  # Resolve the matrix (driver -> protocols) from the TSV, so the protocol list
-  # lives in ONE place.
+  # Resolve the matrix from e2e/ci-matrix.tsv (single source of truth).
   # ---------------------------------------------------------------------------
   matrix:
     runs-on: ubuntu-latest
     outputs:
-      drivers: ${{ steps.gen.outputs.drivers }}
-      count: ${{ steps.gen.outputs.count }}
+      app: ${{ steps.gen.outputs.app }}
+      distro: ${{ steps.gen.outputs.distro }}
     steps:
       - uses: actions/checkout@v4
       - id: gen
-        name: build the driver matrix from e2e/ci-matrix.tsv
+        name: build the protocol matrix from e2e/ci-matrix.tsv
         env:
           ONLY: ${{ inputs.only }}
         run: |
           set -eu
-          # One single line of JSON in the output variable: a real matrix body.
-          out=$(python3 e2e/genmatrix.py)
-          echo "drivers=$out" >> "$GITHUB_OUTPUT"
-          # A compact human summary in the job log.
-          echo "$out" | python3 -c 'import json,sys;d=json.load(sys.stdin);[print(x["driver"],"->",x["protocols"]) for x in d["include"]]'
+          # The generator lives in the repo so it is testable and reviewable,
+          # and so the workflow stays free of inline heredocs.
+          python3 e2e/genmatrix.py --app  > /tmp/app.json
+          python3 e2e/genmatrix.py --distro > /tmp/distro.json
+          echo "app=$(cat /tmp/app.json)"       >> "$GITHUB_OUTPUT"
+          echo "distro=$(cat /tmp/distro.json)" >> "$GITHUB_OUTPUT"
+          echo "app protocols:";    cat /tmp/app.json
+          echo "distro protocols:"; cat /tmp/distro.json
 
   # ---------------------------------------------------------------------------
-  # The real clients.
+  # The application-level clients: ubuntu-latest + one action per toolchain.
+  # A protocol's install steps are `if:`-guarded, so a job sets up only what its
+  # own suite needs.
   # ---------------------------------------------------------------------------
   clients:
     needs: [server, matrix]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.matrix.outputs.drivers) }}
-    # host networking so the container reaches the runner's 127.0.0.1:8080
-    container:
-      image: ${{ matrix.driver }}
+      matrix: ${{ fromJSON(needs.matrix.outputs.app) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -109,369 +128,255 @@ jobs:
           name: easyblobs-bin
           path: /tmp/bin
 
-      - name: toolchain sanity
-        run: |
-          set -eu
-          echo "driver: ${{ matrix.driver }}"
-          echo "protocols: ${{ matrix.protocols }}"
-          # Do NOT require curl/wget/tar here: the minimal drivers (alpine,
-          # nixos, ubuntu) install them in the next step. A hard check at this
-          # point failed those jobs with "missing curl" before they could.
-          echo "basics are ensured by the install step"
-
-      # A few clients are NOT in their base image. Installing them here (rather
-      # than baking a custom image) keeps the matrix to stock images, and the
-      # guard makes the intent explicit: only install when the protocol runs.
-      - name: install the extra client for this driver
-        run: |
-          set -eu
-          P=" ${{ matrix.protocols }} "
-          has() { case "$P" in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
-          # The CI plumbing needs a few basics on a bare image. Install only
-          # what is missing, using whichever package manager the image has.
-          need=""
-          for t in curl wget tar git; do
-            command -v "$t" >/dev/null || need="$need $t"
-          done
-          if [ -n "$need" ]; then
-            if command -v apt-get >/dev/null; then
-              apt-get update -qq && apt-get install -y -qq $need >/dev/null
-            elif command -v apk >/dev/null; then
-              apk add --no-cache $need >/dev/null
-            elif command -v dnf >/dev/null; then
-              dnf install -y -q $need >/dev/null
-            elif command -v microdnf >/dev/null; then
-              microdnf install -y $need >/dev/null
-            elif command -v zypper >/dev/null; then
-              zypper -n install $need >/dev/null
-            else
-              # nixos has no package manager on PATH and DOES already ship
-              # curl/wget/tar/git, so reaching here means something else is
-              # missing. Report exactly what, then continue: the protocol step
-              # will fail with a real error if it truly cannot run.
-              echo "WARNING: cannot install:$need (no apt/apk/dnf/zypper)" >&2
-            fi
-          fi
-          # hex's script installs a PREBUILT archive that only exists in the
-          # project's own tool image, so fetch it from hex.pm instead.
-          if has hex; then
-            if [ ! -f /opt/hex-archive/hex.ez ]; then
-              mkdir -p /opt/hex-archive
-              if command -v curl >/dev/null; then
-                curl -fsSL -o /opt/hex-archive/hex.ez \
-                  "https://repo.hex.pm/installs/hex-1.x.csv" 2>/dev/null || true
-              fi
-              # `mix local.hex --force` is the portable way; the script's archive
-              # path is only a shortcut when the image bakes it in.
-              rm -f /opt/hex-archive/hex.ez
-              mix local.hex --force >/dev/null 2>&1 || true
-            fi
-          fi
-          # python3 only where a suite drives the API directly.
-          if has swift || has protobuf; then
-            if ! command -v python3 >/dev/null && command -v apt-get >/dev/null; then
-              apt-get update -qq && apt-get install -y -qq python3 >/dev/null
-            fi
-          fi
-          if has conan; then
-            python3 -m pip install --quiet --disable-pip-version-check conan
-          fi
-          if has luarocks; then
-            # alpine has luarocks as a package; debian-family images too. Install
-            # with whichever package manager this image has.
-            if command -v apk >/dev/null; then
-              # NOT silenced: alpine has both `lua5.4` and `luarocks`, and the
-              # package set has to be consistent (luarocks pulls a specific lua
-              # version). A silent failure here showed up later as the useless
-              # message 'luarocks: not found'.
-              # build-base + the lua headers: luafilesystem is a C extension, so
-              # luarocks must be able to compile it.
-              #
-              # Released alpine repositories do NOT carry a `luarocks` package
-              # (it lives in community/testing), so try the plain package first
-              # and fall back to building it from source if absent. Both attempts
-              # print their error - silence here produced nothing but
-              # 'luarocks: not found' three CI rounds in a row.
-              apk add --no-cache lua5.4 lua5.4-dev build-base unzip curl 2>&1 | tail -3 || true
-              # NOTE: test the INSTALL, not the pipeline. `if ! apk add ... | tail`
-              # negates tail's status, so a failing apk silently looked like
-              # success and the source build never ran.
-              if ! apk add --no-cache luarocks 2>&1 | tail -3; then :; fi
-              if ! command -v luarocks >/dev/null; then
-                echo "luarocks not packaged; building from source"
-                LV=3.11.1
-                curl -fsSL -o /tmp/luarocks.tgz \
-                  "https://luarocks.org/releases/luarocks-${LV}.tar.gz"
-                tar -xzf /tmp/luarocks.tgz -C /tmp
-                ( cd /tmp/luarocks-${LV} \
-                  && ./configure --with-lua-include=/usr/include/lua5.4 \
-                  && make >/dev/null && make install >/dev/null )
-              fi
-            elif command -v apt-get >/dev/null; then
-              apt-get update -qq && apt-get install -y -qq luarocks lua5.4 >/dev/null
-            fi
-            command -v luarocks >/dev/null && echo "luarocks: $(luarocks --version 2>&1 | head -1)"
-            command -v luarocks >/dev/null || echo "WARNING: luarocks did not install"
-          fi
-          if has gitlfs; then
-            if command -v apk >/dev/null; then
-              apk add --no-cache git git-lfs >/dev/null
-            elif command -v apt-get >/dev/null; then
-              apt-get update -qq && apt-get install -y -qq git git-lfs >/dev/null
-            fi
-            git lfs install >/dev/null 2>&1 || true
-            command -v git-lfs >/dev/null && echo "git-lfs: $(git lfs version)"
-          fi
-          if has jsr; then
-            # The real JSR client is deno.
-            if ! command -v deno >/dev/null; then
-              curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh >/dev/null 2>&1 || true
-            fi
-            command -v deno >/dev/null && echo "deno: $(deno --version | head -1)" || echo "WARNING: deno not installed"
-          fi
-          if has ivy; then
-            # sbt is the client. Use the official launcher script (the
-            # sbtscala/sbt image does not exist under that name).
-            # It also needs a JDK: ubuntu ships without one and sbt fails with
-            # 'java: command not found' (which a piped `tail` used to hide).
-            if ! command -v java >/dev/null; then
-              apt-get update -qq
-              DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openjdk-21-jre-headless >/dev/null || true
-            fi
-            if ! command -v sbt >/dev/null; then
-              curl -fsSL "https://github.com/sbt/sbt/releases/download/v1.10.7/sbt-1.10.7.tgz" -o /tmp/sbt.tgz \
-                && tar -xzf /tmp/sbt.tgz -C /opt \
-                && ln -sf /opt/sbt/bin/sbt /usr/local/bin/sbt || true
-            fi
-            command -v sbt >/dev/null && echo "sbt: present" || echo "WARNING: sbt not installed"
-          fi
-          if has jenkins; then
-            if ! command -v java >/dev/null; then
-              apt-get update -qq
-              DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openjdk-21-jre-headless >/dev/null || true
-            fi
-          fi
-          if has bazel; then
-            # bazelisk is the portable bazel launcher (bazelbuild/bazel is not a
-            # pullable image name).
-            if ! command -v bazel >/dev/null; then
-              curl -fsSL -o /usr/local/bin/bazel \
-                "https://github.com/bazelbuild/bazelisk/releases/download/v1.25.0/bazelisk-linux-amd64" \
-                && chmod +x /usr/local/bin/bazel || true
-            fi
-            command -v bazel >/dev/null && echo "bazel: $(bazel --version 2>/dev/null | head -1)" || echo "WARNING: bazel not installed"
-          fi
-          if has hackage || has stackage; then
-            # cabal from the distro. ghcup downloads a whole GHC toolchain
-            # (hundreds of MB) and did not finish in the job's budget; Debian's
-            # `cabal-install` is enough to drive the mirror.
-            if ! command -v cabal >/dev/null; then
-              apt-get update -qq
-              DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cabal-install ghc >/dev/null || \
-                apt-get install -y -qq cabal-install >/dev/null || true
-            fi
-            command -v cabal >/dev/null && echo "cabal: $(cabal --version | head -1)" || echo "WARNING: cabal not installed"
-          fi
-          if has cpan; then
-            # cpanm is the client this suite drives.
-            if ! command -v cpanm >/dev/null; then
-              if command -v apt-get >/dev/null; then
-                apt-get update -qq && apt-get install -y -qq cpanminus build-essential >/dev/null
-              fi
-            fi
-            command -v cpanm >/dev/null && echo "cpanm: present" || echo "WARNING: cpanm not installed"
-          fi
-          if has opam; then
-            if ! command -v opam >/dev/null && command -v apt-get >/dev/null; then
-              apt-get update -qq && apt-get install -y -qq opam >/dev/null
-            fi
-            command -v opam >/dev/null && echo "opam: $(opam --version)" || echo "WARNING: opam not installed"
-          fi
-          if has pecl; then
-            # `pecl download` also needs the build toolchain for phpize.
-            if command -v apt-get >/dev/null; then
-              apt-get update -qq && apt-get install -y -qq php-dev build-essential >/dev/null 2>&1 || true
-            fi
-            command -v pecl >/dev/null && echo "pecl: present" || echo "WARNING: pecl not installed"
-          fi
-          if has jenkins; then
-            if ! command -v jenkins-plugin-cli >/dev/null; then
-              JPCLI=https://github.com/jenkinsci/plugin-installation-manager-tool/releases/download/2.12.15/jenkins-plugin-manager-2.12.15.jar
-              curl -fsSL -o /opt/jpm.jar "$JPCLI" 2>/dev/null || true
-              if [ -s /opt/jpm.jar ]; then
-                printf '%s\n' '#!/bin/sh' 'exec java -jar /opt/jpm.jar "$@"' > /usr/local/bin/jenkins-plugin-cli
-                chmod +x /usr/local/bin/jenkins-plugin-cli
-              fi
-            fi
-            command -v jenkins-plugin-cli >/dev/null && echo "jenkins-plugin-cli: present" || echo "WARNING: jenkins-plugin-cli not installed"
-          fi
-          if has stackage && ! command -v cabal >/dev/null; then
-            echo "WARNING: cabal not installed for the stackage suite"
-          fi
-          if has juliapkg && command -v apt-get >/dev/null; then
-            apt-get update -qq && apt-get install -y -qq ca-certificates >/dev/null
-          fi
-          if has cran && command -v apt-get >/dev/null; then
-            apt-get update -qq && apt-get install -y -qq libcurl4-openssl-dev >/dev/null || true
-          fi
-          if has protobuf; then
-            # `buf build` is what the script asserts with.
-            if ! command -v buf >/dev/null; then
-              BUF_VER=1.47.2
-              curl -fsSL -o /tmp/buf \
-                "https://github.com/bufbuild/buf/releases/download/v${BUF_VER}/buf-Linux-x86_64"
-              install -m 0755 /tmp/buf /usr/local/bin/buf
-            fi
-          fi
-          if has nix; then
-            # `nixos/nix` cannot be an Actions job container: its image sets
-            #   PATH=/root/.nix-profile/bin:/nix/var/nix/profiles/default/bin:...
-            # with no /usr/bin at all, so every action dies with
-            #   exec /__e/node24/bin/node: no such file or directory
-            # before a step runs.
-            #
-            # So nix is unpacked here instead: the official static tarball gives
-            # a working `nix` without the installer (which needs sudo) and
-            # without touching PATH globally.
-            if ! command -v nix >/dev/null; then
-              apt-get update -qq
-              apt-get install -y -qq curl xz-utils >/dev/null
-              mkdir -p /nix
-              NIX_VER=2.24.10
-              curl -fsSL -o /tmp/nix.tar.xz \
-                "https://releases.nixos.org/nix/nix-${NIX_VER}/nix-${NIX_VER}-x86_64-linux.tar.xz"
-              tar -xJf /tmp/nix.tar.xz -C /tmp
-              # The Nix daemon model needs the `nixbld` build-users group, and a
-              # fresh container has neither the group nor its users:
-              #   error: the group 'nixbld' specified in 'build-users-group'
-              #          does not exist
-              # Create them, then point NIX_CONFIG at that group.
-              addgroup --system nixbld 2>/dev/null || true
-              # /var/empty is the nixbld home; it does not exist in a minimal
-              # image and adduser refuses the user without it:
-              #   info: The home dir /var/empty you specified can't be accessed
-              mkdir -p /var/empty
-              # `adduser` here is a perl script that needs a writable /etc and a
-              # existing skel dir; in a bare container it silently declined and
-              # the installer then reported
-              #   error: the build users group 'nixbld' has no members
-              # Use useradd (shadow-utils), which is non-interactive, and verify
-              # the group actually has members before continuing.
-              for i in 1 2 3 4 5 6 7 8 9 10; do
-                id "nixbld$i" >/dev/null 2>&1 || \
-                  useradd --system --home-dir /var/empty --no-create-home \
-                    --shell /usr/sbin/nologin --gid nixbld \
-                    --comment "Nix build user $i" "nixbld$i" 2>/dev/null || true
-              done
-              echo "nixbld members: $(getent group nixbld | cut -d: -f4)"
-              if [ -z "$(getent group nixbld | cut -d: -f4)" ]; then
-                # useradd also declined (shadow-utils missing, or /etc not
-                # writable). Fall back to editing /etc/passwd + /etc/group
-                # directly - that is all Nix actually needs: names that resolve.
-                echo "nixbld still empty; writing /etc/passwd and /etc/group by hand"
-                # Remove any existing entry for the group, then append a clean
-                # one that lists its members. (A previous sed assumed gid 30000;
-                # if addgroup created it with another gid the substitution never
-                # matched and the group stayed memberless.)
-                grep -v '^nixbld:' /etc/group > /tmp/group.new || true
-                MEMBERS=$(printf 'nixbld%s,' 1 2 3 4 5 6 7 8 9 10 | sed 's/,$//')
-                echo "nixbld:x:30000:$MEMBERS" >> /tmp/group.new
-                cat /tmp/group.new > /etc/group
-                for i in 1 2 3 4 5 6 7 8 9 10; do
-                  grep -q "^nixbld$i:" /etc/passwd || \
-                    echo "nixbld$i:x:$((30000+i)):30000:Nix build user $i:/var/empty:/usr/sbin/nologin" >> /etc/passwd
-                done
-                echo "nixbld members now: $(getent group nixbld | cut -d: -f4)"
-                echo "nixbld users now: $(getent passwd nixbld1 | cut -d: -f1)"
-              fi
-              # Keep the installer's FULL output: the previous "--no-daemon
-              # --no-modify-profile" attempt hid the real reason behind 'tail -5'.
-              /tmp/nix-${NIX_VER}-x86_64-linux/install --no-daemon \
-                --no-channel-add 2>&1 | tail -25 || true
-              # Single-user installs still consult build-users-group; make it
-              # explicit so nix does not look for a group that may be missing.
-              mkdir -p /etc/nix
-              if ! grep -qs build-users-group /etc/nix/nix.conf; then
-                echo "build-users-group = nixbld" >> /etc/nix/nix.conf
-              fi
-              for p in /nix/var/nix/profiles/default/bin /root/.nix-profile/bin; do
-                [ -d "$p" ] && echo "$p" >> "$GITHUB_PATH"
-                [ -d "$p" ] && ln -sf "$p/nix" /usr/local/bin/nix 2>/dev/null || true
-              done
-            fi
-            if command -v nix >/dev/null; then
-              echo "nix: $(nix --version)"
-            else
-              echo "WARNING: nix not available; the suite will report the reason"
-            fi
-          fi
-          echo "installed; tool checks:"
-          for t in conan luarocks buf git-lfs; do
-            command -v "$t" >/dev/null && echo "  $t: $(command -v "$t")" || true
-          done
-
-      # The go protocol script runs `go get`, so the GO toolchain has to be in
-      # the image. It is on the runner, not in most images, so add it here.
-      - name: install go for the go protocol
-        if: contains(matrix.protocols, 'go')
-        uses: actions/setup-go@v5
+      # ---- toolchains, each guarded by the protocol that needs it ----------
+      - uses: actions/setup-go@v5
+        if: contains(matrix.protocol, 'go')
         with:
           go-version-file: go.work
           cache: true
+
+      - uses: actions/setup-node@v4
+        if: contains(matrix.protocol, 'npm')
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - uses: actions/setup-python@v5
+        if: contains(matrix.protocol, 'pypi') || contains(matrix.protocol, 'huggingface') || contains(matrix.protocol, 'conan')
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - uses: actions/setup-java@v4
+        if: contains(matrix.protocol, 'maven') || contains(matrix.protocol, 'gradle') || contains(matrix.protocol, 'ivy') || contains(matrix.protocol, 'jenkins') || contains(matrix.protocol, 'google') || contains(matrix.protocol, 'clojars') || contains(matrix.protocol, 'spring') || contains(matrix.protocol, 'jitpack')
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - uses: actions/setup-dotnet@v4
+        if: contains(matrix.protocol, 'nuget')
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - uses: ruby/setup-ruby@v1
+        if: contains(matrix.protocol, 'rubygems')
+        with:
+          ruby-version: ${{ env.RUBY_VERSION }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: contains(matrix.protocol, 'cargo')
+
+      - uses: denoland/setup-deno@v2
+        if: contains(matrix.protocol, 'jsr')
+        with:
+          deno-version: ${{ env.DENO_VERSION }}
+
+      - uses: azure/setup-helm@v4
+        if: contains(matrix.protocol, 'helm')
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - uses: erlef/setup-beam@v1
+        if: contains(matrix.protocol, 'hex')
+        with:
+          otp-version: "27"
+          elixir-version: "1.17"
+
+      - uses: dart-lang/setup-dart@v1
+        if: contains(matrix.protocol, 'pub')
+
+      - uses: julia-actions/setup-julia@v2
+        if: contains(matrix.protocol, 'juliapkg')
+        with:
+          version: ${{ env.JULIA_VERSION }}
+
+      - uses: haskell-actions/setup@v2
+        if: contains(matrix.protocol, 'hackage') || contains(matrix.protocol, 'stackage')
+        with:
+          ghc-version: ${{ env.HASKELL_GHC }}
+          cabal-version: latest
+
+      - uses: ocaml/setup-ocaml@v3
+        if: contains(matrix.protocol, 'opam')
+        with:
+          ocaml-compiler: ${{ env.OCAML_VERSION }}
+
+      - uses: shivammathur/setup-php@v2
+        if: contains(matrix.protocol, 'pecl')
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          tools: pecl, phpize
+
+      - uses: shogo82148/actions-setup-perl@v1
+        if: contains(matrix.protocol, 'cpan')
+        with:
+          perl-version: ${{ env.PERL_VERSION }}
+
+      - uses: cachix/install-nix-action@v30
+        if: contains(matrix.protocol, 'nix')
+
+      - uses: leafo/gh-actions-lua@v10
+        if: contains(matrix.protocol, 'luarocks')
+        with:
+          luaVersion: "5.4"
+      - uses: leafo/gh-actions-luarocks@v4
+        if: contains(matrix.protocol, 'luarocks')
+
+      - uses: bazel-contrib/setup-bazel@0.8.5
+        if: contains(matrix.protocol, 'bazel')
+        with:
+          bazelisk-cache: true
+
+      - uses: bufbuild/buf-setup-action@v1
+        if: contains(matrix.protocol, 'protobuf')
+        with:
+          version: ${{ env.BUF_VERSION }}
+
+      - uses: r-lib/actions/setup-r@v2
+        if: contains(matrix.protocol, 'cran')
+        with:
+          r-version: ${{ env.R_VERSION }}
+
+      - uses: swift-actions/setup-swift@v2
+        if: contains(matrix.protocol, 'swift')
+        with:
+          swift-version: ${{ env.SWIFT_VERSION }}
+
+      - uses: conda-incubator/setup-miniconda@v3
+        if: contains(matrix.protocol, 'conda')
+        with:
+          miniforge-version: latest
+          activate-environment: e2e
+
+      - uses: ramsey/composer-install@v3
+        if: contains(matrix.protocol, 'composer')
+
+      - name: install composer's php runtime
+        if: contains(matrix.protocol, 'composer')
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+
+      - name: install sbt runner for ivy
+        if: contains(matrix.protocol, 'ivy')
+        uses: sbt/setup-sbt@v1
+        with:
+          sbt-runner-version: ${{ env.SBT_RUNNER_VERSION }}
+
+      - name: install jenkins-plugin-cli
+        if: contains(matrix.protocol, 'jenkins')
+        run: |
+          set -eu
+          V="${{ env.JENKINS_PLUGIN_MANAGER }}"
+          curl -fsSL -o /opt/jpm.jar \
+            "https://github.com/jenkinsci/plugin-installation-manager-tool/releases/download/${V}/jenkins-plugin-manager-${V}.jar"
+          printf '%s\n' '#!/bin/sh' 'exec java -jar /opt/jpm.jar "$@"' > /usr/local/bin/jenkins-plugin-cli
+          chmod +x /usr/local/bin/jenkins-plugin-cli
+          jenkins-plugin-cli --version || true
+
+      - name: install conan
+        if: contains(matrix.protocol, 'conan')
+        run: python3 -m pip install --quiet --disable-pip-version-check conan
+
+      # ---- the server + the suite ----------------------------------------
+      - name: start easyblobs
+        run: |
+          set -eu
+          chmod +x /tmp/bin/easyblobs-bin
+          mkdir -p /tmp/eb-data
+          # EASYBLOBS_DEBUG makes the server log every request, which the cache
+          # assertions rely on when a protocol looks like it stored nothing.
+          EASYBLOBS_DEBUG=1 /tmp/bin/easyblobs-bin --listen "0.0.0.0:${EASYBLOBS_PORT}" \
+            --data /tmp/eb-data --self-base "http://127.0.0.1:${EASYBLOBS_PORT}" \
+            >/tmp/easyblobs.log 2>&1 &
+          i=0
+          until curl -fsS --noproxy '*' "http://127.0.0.1:${EASYBLOBS_PORT}/healthz" >/dev/null 2>&1; do
+            i=$((i+1)); [ "$i" -gt 120 ] && { cat /tmp/easyblobs.log; exit 1; }
+            sleep 0.5
+          done
+          curl -fsS --noproxy '*' "http://127.0.0.1:${EASYBLOBS_PORT}/healthz"
+          {
+            echo "EASYBLOBS_ORIGIN=http://127.0.0.1:${EASYBLOBS_PORT}"
+            echo "EASYBLOBS_DATA=/tmp/eb-data"
+          } >> "$GITHUB_ENV"
+
+      - name: run the real client
+        run: |
+          set -u
+          echo "ORIGIN=${EASYBLOBS_ORIGIN:-unset}"
+          echo "protocol=${{ matrix.protocol }}"
+          sh -x e2e/ci-run.sh "${{ matrix.protocol }}"
+
+      - name: upload the server log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: easyblobs-log-${{ matrix.protocol }}
+          path: /tmp/easyblobs.log
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # The distro package managers: they must run in the userland they test.
+  # ---------------------------------------------------------------------------
+  distro-clients:
+    needs: [server, matrix]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix.outputs.distro) }}
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: easyblobs-bin
+          path: /tmp/bin
+
+      - name: install the basics this image lacks
+        run: |
+          set -eu
+          need=""
+          for t in curl wget tar; do
+            command -v "$t" >/dev/null || need="$need $t"
+          done
+          if [ -n "$need" ]; then
+            if command -v apk >/dev/null; then
+              apk add --no-cache $need
+            elif command -v apt-get >/dev/null; then
+              apt-get update -qq && apt-get install -y -qq $need >/dev/null
+            elif command -v dnf >/dev/null; then
+              dnf install -y -q $need >/dev/null
+            fi
+          fi
 
       - name: start easyblobs
         run: |
           set -eu
           chmod +x /tmp/bin/easyblobs-bin
           mkdir -p /tmp/eb-data
-          # EASYBLOBS_DEBUG makes the server log every request
-          # ("req GET /artifacts/..."). ci-run.sh uses that count to tell
-          # "the client never reached the mount" apart from "the mount answered
-          # but stored nothing" - without the flag the count is always 0 and
-          # every protocol would look like a bypass.
           EASYBLOBS_DEBUG=1 /tmp/bin/easyblobs-bin --listen "0.0.0.0:${EASYBLOBS_PORT}" \
             --data /tmp/eb-data --self-base "http://127.0.0.1:${EASYBLOBS_PORT}" \
             >/tmp/easyblobs.log 2>&1 &
           i=0
-          until curl -fsS "http://127.0.0.1:${EASYBLOBS_PORT}/healthz" >/dev/null 2>&1; do
+          until curl -fsS --noproxy '*' "http://127.0.0.1:${EASYBLOBS_PORT}/healthz" >/dev/null 2>&1; do
             i=$((i+1)); [ "$i" -gt 120 ] && { cat /tmp/easyblobs.log; exit 1; }
             sleep 0.5
           done
-          curl -fsS "http://127.0.0.1:${EASYBLOBS_PORT}/healthz"
+          curl -fsS --noproxy '*' "http://127.0.0.1:${EASYBLOBS_PORT}/healthz"
           {
-            # The ORIGIN only: ci-run.sh derives the per-protocol mount
-            # (including /maven/_upstream/<host> for the maven-family suites).
             echo "EASYBLOBS_ORIGIN=http://127.0.0.1:${EASYBLOBS_PORT}"
             echo "EASYBLOBS_DATA=/tmp/eb-data"
           } >> "$GITHUB_ENV"
 
-      - name: run the real clients
+      - name: run the real client
         run: |
           set -u
-          # `sh e2e/ci-run.sh` produced NOTHING in the previous run, which means
-          # the script died before its first echo. Trace it so the exact line is
-          # visible, and echo the environment it needs.
-          echo "ORIGIN=${EASYBLOBS_ORIGIN:-unset}"
-          echo "DATA=${EASYBLOBS_DATA:-unset}"
-          fail=""
-          for p in ${{ matrix.protocols }}; do
-            echo "::group::e2e $p"
-            if ! sh -x e2e/ci-run.sh "$p"; then
-              fail="$fail $p"
-            fi
-            echo "::endgroup::"
-          done
-          if [ -n "$fail" ]; then
-            echo "FAILED protocols:$fail" >&2
-            exit 1
-          fi
-          echo "all protocols in this driver passed"
+          echo "protocol=${{ matrix.protocol }} image=${{ matrix.image }}"
+          sh -x e2e/ci-run.sh "${{ matrix.protocol }}"
 
-      - name: upload server log on failure
+      - name: upload the server log on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: easyblobs-log-${{ strategy.job-index }}
+          name: easyblobs-log-${{ matrix.protocol }}
           path: /tmp/easyblobs.log
           if-no-files-found: ignore
-
