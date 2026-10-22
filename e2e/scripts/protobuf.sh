@@ -42,10 +42,11 @@ trap 'rm -rf "$TMP"' EXIT
 # The module's NAME carries the registry host: `buf push` resolves it from here
 # and calls <host>/buf.alpha.registry.v1alpha1.PushService/... . Naming the
 # mirror as the host is what makes the CLI talk to THIS server.
-# The registry HOST carries no port: buf dials https://<host>:443, and the TLS
-# terminator in this suite forwards 443 -> the mirror's own port. Putting :8080
-# here would make buf dial https://<host>:8080 instead and miss the terminator.
+# With `tls: { use: false }` buf talks plain HTTP to <host>, so the host must
+# carry the port this server actually listens on.
 BUF_REGISTRY_HOST="${BUF_REGISTRY_HOST:-bsr.easyblobs.test}"
+BUF_REGISTRY_PORT="${BUF_REGISTRY_PORT:-${EASYBLOBS_PORT:-8080}}"
+BUF_REGISTRY_ADDR="$BUF_REGISTRY_HOST:$BUF_REGISTRY_PORT"
 mkdir -p "$TMP/mod/proto/acme/plugin/v1"
 # buf.yaml v2 rule (straight from the CLI):
 #   "top-level name key cannot be specified if modules are specified, you must
@@ -55,7 +56,7 @@ cat > "$TMP/mod/buf.yaml" <<YAML
 version: v2
 modules:
   - path: proto
-    name: $BUF_REGISTRY_HOST/acme/$REPO
+    name: $BUF_REGISTRY_ADDR/acme/$REPO
 YAML
 cat > "$TMP/mod/proto/acme/plugin/v1/plugin.proto" <<'PROTO'
 syntax = "proto3";
@@ -230,63 +231,33 @@ echo "protobuf: OK (pushed a module/plugin and read it back byte-for-byte)"
 if [ -n "${BUF_BIN:-}" ] && [ -x "${BUF_BIN}" ]; then
   echo "protobuf: driving the real buf CLI"
 
-  # buf reaches a registry as HTTPS on <host>:443 - the scheme is implied by the
-  # name in buf.yaml and a URL cannot be given there. The mirror serves plain
-  # HTTP on :8080, so stand up a TLS terminator on 443 in front of it with the
-  # certificate the job generated. That is exactly how an on-prem BSR sits
-  # behind a TLS proxy, so it is a faithful test of the publish path.
-  if [ -n "${BUF_TLS_CERT:-}" ] && [ -n "${BUF_TLS_KEY:-}" ] &&
-     [ -s "$BUF_TLS_CERT" ] && [ -s "$BUF_TLS_KEY" ]; then
-    if command -v socat >/dev/null; then
-      PORT="${EASYBLOBS_PORT:-8080}"
-      # :443 is a PRIVILEGED port: binding it as an unprivileged user fails with
-      #   socat[..] E bind(6, {AF=10 [...]:443}, 28): Permission denied
-      # so the terminator runs under sudo when we are not already root.
-      #
-      # -v logs the forwarded bytes, which is how a "buf says 404 but the server
-      # saw nothing" case gets distinguished from "buf never reached us".
-      SOCAT_CMD="socat -v OPENSSL-LISTEN:443,fork,reuseaddr,cert=$BUF_TLS_CERT,key=$BUF_TLS_KEY,verify=0 TCP:127.0.0.1:$PORT"
-      if [ "$(id -u)" -eq 0 ]; then
-        sh -c "$SOCAT_CMD" >/tmp/socat.log 2>&1 &
-      else
-        sudo sh -c "$SOCAT_CMD" >/tmp/socat.log 2>&1 &
-      fi
-      SOCAT_PID=$!
-      sleep 2
-      # Probe the PORT, not the PID: under sudo the process we spawned is the
-      # sudo wrapper, so 'kill -0' does not tell us whether socat is listening.
-      up=0
-      i=0
-      while [ "$i" -lt 20 ]; do
-        if command -v openssl >/dev/null &&
-           echo | openssl s_client -connect "127.0.0.1:443" -servername "$BUF_REGISTRY_HOST" \
-             -CAfile "$BUF_TLS_CERT" >/dev/null 2>&1; then
-          up=1; break
-        fi
-        i=$((i+1)); sleep 0.5
-      done
-      if [ "$up" -eq 1 ]; then
-        echo "protobuf: TLS terminator is serving on :443 -> 127.0.0.1:$PORT"
-        # Prove the WHOLE path from the loopback name buf will use: DNS name ->
-        # 443 -> terminator -> mirror -> handler. If this fails, the push failure
-        # is a plumbing problem and not a protocol one.
-        glue_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
-          --resolve "$BUF_REGISTRY_HOST:443:127.0.0.1" \
-          --cacert "$BUF_TLS_CERT" \
-          -X POST -H 'Content-Type: application/json' \
-          -d '{"moduleRefs":[{"value":{"name":{"owner":"probe","module":"probe"}}}]}' \
-          "https://$BUF_REGISTRY_HOST/buf.registry.module.v1.ModuleService/GetModules" 2>/dev/null || echo 000)
-        echo "protobuf: end-to-end probe through the TLS path -> HTTP $glue_code"
-      else
-        echo "protobuf: WARNING the TLS terminator did not come up; see /tmp/socat.log" >&2
-        cat /tmp/socat.log >&2 || true
-      fi
-    else
-      echo "protobuf: WARNING socat is not available; buf cannot reach an HTTP mirror" >&2
-    fi
-  else
-    echo "protobuf: WARNING no TLS material provided; buf needs HTTPS to the registry" >&2
-  fi
+  # buf does NOT require HTTPS - that was my assumption, and the code says
+  # otherwise. In buf's own client config:
+  #
+  #   connectclient.WithAddressMapper(func(address string) string {
+  #       if config.TLS == nil { return buftransport.PrependHTTP(address) }
+  #       return buftransport.PrependHTTPS(address)
+  #   })
+  #
+  # and certclient.NewClientTLSConfig returns (nil, nil) for `tls.use: false`.
+  # So plain HTTP is a first-class mode, and no TLS terminator is needed.
+  #
+  # The switch lives in buf's GLOBAL config (appext ReadConfig):
+  #   <ConfigDir>/config.yaml, with
+  #     version: v1
+  #     tls: { use: false }
+  # and <ConfigDir> is overridable with the CONFIG_DIR environment variable,
+  # which is how this runs without touching the runner's real config.
+  BUF_CONFIG_DIR="${BUF_CONFIG_DIR:-$TMP/bufcfg}"
+  mkdir -p "$BUF_CONFIG_DIR"
+  cat > "$BUF_CONFIG_DIR/config.yaml" <<'CFG'
+version: v1
+tls:
+  use: false
+CFG
+  export CONFIG_DIR="$BUF_CONFIG_DIR"
+  echo "protobuf: buf global config ($CONFIG_DIR/config.yaml):"
+  cat "$CONFIG_DIR/config.yaml"
 
   cd "$TMP/mod"
   "$BUF_BIN" --version
