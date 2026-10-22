@@ -62,10 +62,12 @@ cat > ivysettings.xml <<XML
 XML
 
 echo "ivy: resolving $PLUGIN_ORG:$PLUGIN_NAME:$PLUGIN_REV through the mount"
+# NOTE: only real Ivy options here. An unrecognised flag makes Ivy print its
+# help text and exit 0 without resolving anything - which is exactly what
+# '-noillustrations' did in the previous run.
 if ! java -jar "$IVY_JAR" \
       -ivy ivysettings.xml \
-      -retrieve '/tmp/ivywork/lib/[artifact].[ext]' \
-      -noillustrations 2>&1 | tail -20; then
+      -retrieve '/tmp/ivywork/lib/[artifact].[ext]' 2>&1 | tail -20; then
   echo "ivy: the resolver failed"
 fi
 
