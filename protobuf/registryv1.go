@@ -558,10 +558,22 @@ func indexByte(s string, c byte) int {
 // addresses specific content.
 func (s *State) v1GetCommits(w http.ResponseWriter, r *http.Request, body []byte, binary bool) bool {
 	contentType := r.Header.Get("Content-Type")
-	// GetCommitsRequest { repeated CommitRef commit_refs = 1; }
-	// CommitRef { oneof value { string id = 1; Full full = 2 } }
-	// CommitRef.Full { ModuleRef module_ref = 1; string commit = 2 }
-	type cref struct{ id, owner, module string }
+	// The REAL shape, from buf/registry/module/v1/commit_service.proto:
+	//
+	//	GetCommitsRequest { repeated ResourceRef resource_refs = 1; }
+	//
+	// and resource.proto:
+	//
+	//	ResourceRef { oneof value { string id = 1; Name name = 2 } }
+	//	ResourceRef.Name {
+	//	  string owner = 1; string module = 2;
+	//	  oneof child { string label_name = 3; string ref = 4; }
+	//	}
+	//
+	// I had implemented commit_refs/CommitRef.Full, which is a DIFFERENT message -
+	// so the request decoded into zero refs and buf reported
+	// "expect 1 commit from response, got 0".
+	type cref struct{ id, owner, module, ref, label string }
 	var refs []cref
 
 	if binary {
@@ -570,61 +582,48 @@ func (s *State) v1GetCommits(w http.ResponseWriter, r *http.Request, body []byte
 			connectError(w, http.StatusBadRequest, "invalid_argument", "decode request: "+err.Error())
 			return true
 		}
-		for _, raw := range allBytes(fields, 1) { // commit_refs
+		for _, raw := range allBytes(fields, 1) { // resource_refs
 			cf, err := wireDecode(raw)
 			if err != nil {
 				continue
 			}
-			inner, err := wireDecode(firstBytes(cf, 1)) // value oneof: id or full
-			if err != nil {
-				continue
-			}
-			// CommitRef.value { string id = 1; Full full = 2 }
-			// CommitRef.Full { ModuleRef module_ref = 1; string commit = 2 }
-			c := cref{id: firstString(inner, 1)} // the direct-id form
-			if fullRaw := firstBytes(inner, 2); fullRaw != nil {
-				ff, err := wireDecode(fullRaw)
+			// ResourceRef.value { string id = 1; Name name = 2 }
+			c := cref{id: firstString(cf, 1)}
+			if nameRaw := firstBytes(cf, 2); nameRaw != nil {
+				nf, err := wireDecode(nameRaw)
 				if err != nil {
 					continue
 				}
-				// The COMMIT id is Full.commit (field 2). It must not be
-				// overwritten by the module name read below - the earlier version
-				// wrote both into c.module and the id was lost, so every lookup
-				// found nothing.
-				c.id = firstString(ff, 2)
-				if refRaw := firstBytes(ff, 1); refRaw != nil { // module_ref
-					rf, err := wireDecode(refRaw)
-					if err != nil {
-						continue
-					}
-					if nameRaw := firstBytes(rf, 2); nameRaw != nil { // ModuleRef.value.name
-						nf, err := wireDecode(nameRaw)
-						if err != nil {
-							continue
-						}
-						c.owner, c.module = firstString(nf, 1), firstString(nf, 2)
-					}
-				}
+				c.owner = firstString(nf, 1)
+				c.module = firstString(nf, 2)
+				c.label = firstString(nf, 3) // child.label_name
+				c.ref = firstString(nf, 4)   // child.ref
 			}
 			refs = append(refs, c)
 		}
 	} else {
 		var req struct {
-			CommitRefs []struct {
+			ResourceRefs []struct {
 				Value struct {
-					ID   string      `json:"id"`
-					Full *v1ModuleRef `json:"full"`
+					ID   string `json:"id"`
+					Name *struct {
+						Owner     string `json:"owner"`
+						Module    string `json:"module"`
+						LabelName string `json:"labelName"`
+						Ref       string `json:"ref"`
+					} `json:"name"`
 				} `json:"value"`
-			} `json:"commitRefs"`
+			} `json:"resourceRefs"`
 		}
 		if err := json.Unmarshal(body, &req); err != nil {
 			connectError(w, http.StatusBadRequest, "invalid_argument", "decode request: "+err.Error())
 			return true
 		}
-		for _, x := range req.CommitRefs {
+		for _, x := range req.ResourceRefs {
 			c := cref{id: x.Value.ID}
-			if x.Value.Full != nil {
-				c.owner, c.module = x.Value.Full.Value.Name.Owner, x.Value.Full.Value.Name.Module
+			if x.Value.Name != nil {
+				c.owner, c.module = x.Value.Name.Owner, x.Value.Name.Module
+				c.label, c.ref = x.Value.Name.LabelName, x.Value.Name.Ref
 			}
 			refs = append(refs, c)
 		}
@@ -647,7 +646,18 @@ func (s *State) v1GetCommits(w http.ResponseWriter, r *http.Request, body []byte
 			contentType, len(refs), len(body), printableBody(body), detail)
 	}
 	for _, c := range refs {
-		if c.id == "" {
+		// A ResourceRef names the commit in one of three ways:
+		//   value.id            - the commit id alone
+		//   Name.child.ref      - "<owner>/<module>:<commit-or-label>"
+		//   Name.child.label_name - a label on the module
+		wanted := c.id
+		if wanted == "" {
+			wanted = c.ref
+		}
+		if wanted == "" {
+			wanted = c.label
+		}
+		if wanted == "" {
 			continue
 		}
 		// The id a client resolves by is the 32-char dashless uuid that our
@@ -662,16 +672,21 @@ func (s *State) v1GetCommits(w http.ResponseWriter, r *http.Request, body []byte
 		// The id-only form is what `buf registry module commit info <pin>`
 		// produces, so it must work; without a module the id is looked up across
 		// every module of this format.
-		owner, module, full, ok := s.resolveCommitAnywhere(r, c.owner, c.module, c.id)
+		owner, module, full, ok := s.resolveCommitAnywhere(r, c.owner, c.module, wanted)
 		if !ok {
 			continue
 		}
+		// The response must carry the commit id, which is the 32-char prefix.
+		id := full
+		if len(id) > 32 {
+			id = id[:32]
+		}
 		commits = append(commits, map[string]any{
-			"id": c.id, "ownerId": owner, "moduleId": module,
+			"id": id, "ownerId": owner, "moduleId": module,
 			"createTime": time.Now().UTC().Format(time.RFC3339),
 		})
 		if binary {
-			out = wireAppendMessage(out, 1, v1CommitWire(c.id, owner, module, full))
+			out = wireAppendMessage(out, 1, v1CommitWire(id, owner, module, full))
 		}
 	}
 	if binary {
