@@ -557,6 +557,7 @@ func indexByte(s string, c byte) int {
 // v1GetCommits makes a pushed commit resolvable, which is how a later read
 // addresses specific content.
 func (s *State) v1GetCommits(w http.ResponseWriter, r *http.Request, body []byte, binary bool) bool {
+	contentType := r.Header.Get("Content-Type")
 	// GetCommitsRequest { repeated CommitRef commit_refs = 1; }
 	// CommitRef { oneof value { string id = 1; Full full = 2 } }
 	// CommitRef.Full { ModuleRef module_ref = 1; string commit = 2 }
@@ -636,8 +637,8 @@ func (s *State) v1GetCommits(w http.ResponseWriter, r *http.Request, body []byte
 	// twice, and guessing the request shape has cost several rounds - so record
 	// what was actually parsed.
 	if debugOn() {
-		log.Printf("protobuf: GetCommits parsed %d ref(s) from %d body byte(s); raw=%q",
-			len(refs), len(body), body)
+		log.Printf("protobuf: GetCommits parsed %d ref(s) from %d body byte(s)", len(refs), len(body))
+		log.Printf("protobuf:   content-type=%q body=%s", contentType, printableBody(body))
 		for i, c := range refs {
 			log.Printf("protobuf:   ref[%d] id=%q owner=%q module=%q", i, c.id, c.owner, c.module)
 		}

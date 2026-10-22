@@ -23,6 +23,31 @@ import (
 	"fmt"
 )
 
+// printableBody renders a request body for the debug log: text stays readable,
+// non-printable bytes become \xNN. A plain %q on binary produced escapes that hid
+// the structure, which is how a JSON body once looked like protobuf.
+func printableBody(b []byte) string {
+	const max = 512
+	truncated := false
+	if len(b) > max {
+		b = b[:max]
+		truncated = true
+	}
+	out := make([]byte, 0, len(b))
+	for _, c := range b {
+		if c >= 0x20 && c < 0x7f || c == '\n' || c == '\t' {
+			out = append(out, c)
+		} else {
+			out = append(out, []byte(fmt.Sprintf("\\x%02x", c))...)
+		}
+	}
+	s := string(out)
+	if truncated {
+		s += "...(truncated)"
+	}
+	return s
+}
+
 // wireField is one decoded field occurrence.
 type wireField struct {
 	Num  int      // field number
