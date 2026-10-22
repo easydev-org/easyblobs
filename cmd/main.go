@@ -137,11 +137,16 @@ func main() {
 			//   req POST /buf.registry.module.v1.ModuleService/GetModules -> 404
 			// The same handler is mounted here under /artifacts/protobuf, so both
 			// the root-addressed and prefixed forms work.
-			// A prefix match is what is wanted: every BSR service name starts
-			// with "buf." (buf.registry.module.v1.*, buf.alpha.registry.*).
+			// ServeMux semantics matter here: a pattern WITHOUT a trailing slash
+			// matches only that exact path, so `mux.Handle("/buf.", h)` never
+			// fired for "/buf.registry.module.v1.ModuleService/GetModules" - the
+			// mount silently did nothing and the request still 404'd.
+			// A pattern WITH a trailing slash is the subtree match that is wanted.
 			scoped := easyblobkit.ScopeMiddlewareForFormat("protobuf", "/", handler)
-			mux.Handle("/buf.", scoped)
+			mux.Handle("/buf./", scoped)
 			mux.Handle("/buf/", scoped)
+			// The alpha API's service names look the same ("buf.alpha...."), so
+			// the single subtree pattern above covers both generations.
 			mounted++
 		}
 		handlers[proto] = handler
