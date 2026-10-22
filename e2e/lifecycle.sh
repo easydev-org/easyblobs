@@ -221,7 +221,25 @@ run_go() {
   Z1="v${V1}"
   Z2="v${V2}"
 
-  gput() { # gput <version> <body>
+  # A go module must be published as a REAL MODULE ZIP, not an arbitrary blob.
+  # The adapter serves .mod by extracting go.mod out of the stored zip (see
+  # extractGoMod); a plain text body stores fine but yields no go.mod, so
+  # .mod falls through to the upstream and 404s for a local module:
+  #   GET /@v/<ver>.mod -> 404
+  # That is the contract, so the suite publishes what the go toolchain
+  # publishes: <module>@<version>/go.mod + source files.
+  make_module_zip() { # make_module_zip <version> <out>
+    python3 - "$MOD" "$1" "$2" "$STAMP" <<'PY'
+import sys, zipfile
+mod, ver, out, stamp = sys.argv[1:5]
+pref = f"{mod}@{ver}"
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+    z.writestr(f"{pref}/go.mod", f"module {mod}\n\ngo 1.21\n")
+    z.writestr(f"{pref}/e2e.go", f"package e2e\n\n// body-{stamp}-{ver}\n")
+PY
+  }
+
+  gput() { # gput <version> <zipfile>
     with_auth -sS -o /dev/null -w '%{http_code}' -X PUT \
       "$BASE/upload?name=$MOD&version=$1" \
       -H "Content-Type: application/octet-stream" \
@@ -235,31 +253,31 @@ run_go() {
       "$BASE/upload?name=$MOD&version=$1"
   }
 
-  echo "lifecycle/go: publishing $Z1"
-  expect_ok "publish $Z1" "$(gput "$Z1" "v1-body-$STAMP")"
+  make_module_zip "$Z1" "$TMP/mod1.zip"
+  make_module_zip "$Z2" "$TMP/mod2.zip"
 
-  # The module must be readable in the shapes the go toolchain asks for.
-  #
-  # NOTE: `.mod` is NOT included here on purpose. A pushed module stores the
-  # .info and the .zip, but the adapter serves `.mod` from an upstream fetch
-  # (it 404s for a module that only exists locally), so asserting 200 on it
-  # would be asserting a behaviour the product does not have. Recorded as a
-  # known gap rather than hidden: a locally-published module cannot be consumed
-  # by the go toolchain until `.mod` is synthesised.
-  for ext in info zip; do
+  echo "lifecycle/go: publishing $Z1"
+  expect_ok "publish $Z1" "$(gput "$Z1" "$TMP/mod1.zip")"
+
+  # All three shapes the go toolchain asks for must be readable, INCLUDING
+  # .mod: it is extracted from the published zip's go.mod, so a properly
+  # published module has one. (This is why the zip, not a text blob, is what
+  # this suite publishes.)
+  for ext in info mod zip; do
     code=$(gget "$BASE/$MOD/@v/$Z1.$ext" "$TMP/go1.$ext")
     expect_code "read $Z1.$ext" 200 "$code"
     [ -s "$TMP/go1.$ext" ] || fail "$Z1.$ext came back empty"
   done
-  code=$(gget "$BASE/$MOD/@v/$Z1.mod" "$TMP/go1.mod")
-  if [ "$code" = "200" ]; then
-    echo "lifecycle/go: $Z1.mod is served"
-  else
-    echo "lifecycle/go: NOTE $Z1.mod -> $code (a locally pushed module has no .mod; known gap)"
-  fi
+  # The extracted go.mod must be the one that was published, and it must
+  # declare the right module path.
+  grep -q "module $MOD" "$TMP/go1.mod" || \
+    fail "the served go.mod does not declare 'module $MOD'"
+  # The zip must be byte-identical to what was published.
+  cmp -s "$TMP/go1.zip" "$TMP/mod1.zip" || \
+    fail "the served module zip differs from the one published"
 
   echo "lifecycle/go: publishing $Z2"
-  expect_ok "publish $Z2" "$(gput "$Z2" "v2-body-$STAMP")"
+  expect_ok "publish $Z2" "$(gput "$Z2" "$TMP/mod2.zip")"
   code=$(gget "$BASE/$MOD/@v/$Z2.info" "$TMP/go2.info")
   expect_code "read $Z2.info" 200 "$code"
 
