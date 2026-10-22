@@ -458,7 +458,11 @@ readonly_protocol() {
     # jsr: deno caches the resolved module in ITS OWN store; the adapter answers
     #      meta.json / version meta / module from upstream and stores nothing,
     #      so the mount's data dir does not grow.
-    swift|nix|jsr) return 0 ;;
+    # bazel: a read-only mirror of the Bazel Central Registry (served through the
+    #        generic target). A PUT is answered 405 by design, so the adapter has
+    #        nothing to store; the suite proves a real bazel resolves a real
+    #        module through the registry and builds a target.
+    swift|nix|jsr|bazel) return 0 ;;
     *) return 1 ;;
   esac
 }
