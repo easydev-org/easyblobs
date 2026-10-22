@@ -42,7 +42,10 @@ trap 'rm -rf "$TMP"' EXIT
 # The module's NAME carries the registry host: `buf push` resolves it from here
 # and calls <host>/buf.alpha.registry.v1alpha1.PushService/... . Naming the
 # mirror as the host is what makes the CLI talk to THIS server.
-BUF_REGISTRY_HOST="${BUF_REGISTRY_HOST:-bsr.easyblobs.test}"
+# The registry host must include the PORT this server listens on: buf talks to
+# <host> directly over HTTPS on 443, so a host without a port can never reach a
+# service on :8080. The harness exports the real endpoint.
+BUF_REGISTRY_HOST="${BUF_REGISTRY_HOST:-bsr.easyblobs.test:8080}"
 mkdir -p "$TMP/mod/proto/acme/plugin/v1"
 # buf.yaml v2 rule (straight from the CLI):
 #   "top-level name key cannot be specified if modules are specified, you must
@@ -226,6 +229,33 @@ echo "protobuf: OK (pushed a module/plugin and read it back byte-for-byte)"
 # ---------------------------------------------------------------------------
 if [ -n "${BUF_BIN:-}" ] && [ -x "${BUF_BIN}" ]; then
   echo "protobuf: driving the real buf CLI"
+
+  # buf reaches a registry as HTTPS on <host>:443 - the scheme is implied by the
+  # name in buf.yaml and a URL cannot be given there. The mirror serves plain
+  # HTTP on :8080, so stand up a TLS terminator on 443 in front of it with the
+  # certificate the job generated. That is exactly how an on-prem BSR sits
+  # behind a TLS proxy, so it is a faithful test of the publish path.
+  if [ -n "${BUF_TLS_CERT:-}" ] && [ -n "${BUF_TLS_KEY:-}" ] &&
+     [ -s "$BUF_TLS_CERT" ] && [ -s "$BUF_TLS_KEY" ]; then
+    if command -v socat >/dev/null; then
+      PORT="${EASYBLOBS_PORT:-8080}"
+      socat "OPENSSL-LISTEN:443,fork,reuseaddr,cert=$BUF_TLS_CERT,key=$BUF_TLS_KEY,verify=0" \
+            "TCP:127.0.0.1:$PORT" >/tmp/socat.log 2>&1 &
+      SOCAT_PID=$!
+      sleep 2
+      if kill -0 "$SOCAT_PID" 2>/dev/null; then
+        echo "protobuf: TLS terminator listening on :443 -> 127.0.0.1:$PORT"
+      else
+        echo "protobuf: WARNING the TLS terminator did not start; see /tmp/socat.log" >&2
+        cat /tmp/socat.log >&2 || true
+      fi
+    else
+      echo "protobuf: WARNING socat is not available; buf cannot reach an HTTP mirror" >&2
+    fi
+  else
+    echo "protobuf: WARNING no TLS material provided; buf needs HTTPS to the registry" >&2
+  fi
+
   cd "$TMP/mod"
   "$BUF_BIN" --version
   if [ -n "${EASYBLOBS_TOKEN:-}" ]; then

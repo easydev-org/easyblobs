@@ -267,7 +267,29 @@ jobs:
             echo "127.0.0.1 $BSR_HOST" | sudo tee -a /etc/hosts >/dev/null
           fi
           getent hosts "$BSR_HOST" || true
+          # buf speaks HTTPS to the registry host on 443 (the scheme is implied
+          # by the host in buf.yaml, it does not accept a URL there), so a
+          # plain-HTTP server on :8080 is not reachable directly. Terminate TLS
+          # on 443 in front of it with a self-signed certificate for that host,
+          # which is exactly what an on-prem BSR behind a TLS proxy looks like.
+          if ! command -v socat >/dev/null; then
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq socat openssl >/dev/null
+          fi
+          sudo mkdir -p /tmp/tls
+          sudo openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -keyout /tmp/tls/key.pem -out /tmp/tls/cert.pem \
+            -subj "/CN=$BSR_HOST" \
+            -addext "subjectAltName=DNS:$BSR_HOST" >/dev/null 2>&1
+          sudo chmod 644 /tmp/tls/key.pem /tmp/tls/cert.pem
+          # buf verifies against the system store, so trust this certificate.
+          if [ -d /usr/local/share/ca-certificates ]; then
+            sudo cp /tmp/tls/cert.pem "/usr/local/share/ca-certificates/$BSR_HOST.crt"
+            sudo update-ca-certificates >/dev/null 2>&1 || true
+          fi
           echo "BUF_REGISTRY_HOST=$BSR_HOST" >> "$GITHUB_ENV"
+          echo "BUF_TLS_CERT=/tmp/tls/cert.pem" >> "$GITHUB_ENV"
+          echo "BUF_TLS_KEY=/tmp/tls/key.pem" >> "$GITHUB_ENV"
 
       - uses: r-lib/actions/setup-r@v2
         if: contains(matrix.protocol, 'cran')
