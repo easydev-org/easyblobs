@@ -239,14 +239,33 @@ if [ -n "${BUF_BIN:-}" ] && [ -x "${BUF_BIN}" ]; then
      [ -s "$BUF_TLS_CERT" ] && [ -s "$BUF_TLS_KEY" ]; then
     if command -v socat >/dev/null; then
       PORT="${EASYBLOBS_PORT:-8080}"
-      socat "OPENSSL-LISTEN:443,fork,reuseaddr,cert=$BUF_TLS_CERT,key=$BUF_TLS_KEY,verify=0" \
-            "TCP:127.0.0.1:$PORT" >/tmp/socat.log 2>&1 &
+      # :443 is a PRIVILEGED port: binding it as an unprivileged user fails with
+      #   socat[..] E bind(6, {AF=10 [...]:443}, 28): Permission denied
+      # so the terminator runs under sudo when we are not already root.
+      SOCAT_CMD="socat OPENSSL-LISTEN:443,fork,reuseaddr,cert=$BUF_TLS_CERT,key=$BUF_TLS_KEY,verify=0 TCP:127.0.0.1:$PORT"
+      if [ "$(id -u)" -eq 0 ]; then
+        sh -c "$SOCAT_CMD" >/tmp/socat.log 2>&1 &
+      else
+        sudo sh -c "$SOCAT_CMD" >/tmp/socat.log 2>&1 &
+      fi
       SOCAT_PID=$!
       sleep 2
-      if kill -0 "$SOCAT_PID" 2>/dev/null; then
-        echo "protobuf: TLS terminator listening on :443 -> 127.0.0.1:$PORT"
+      # Probe the PORT, not the PID: under sudo the process we spawned is the
+      # sudo wrapper, so 'kill -0' does not tell us whether socat is listening.
+      up=0
+      i=0
+      while [ "$i" -lt 20 ]; do
+        if command -v openssl >/dev/null &&
+           echo | openssl s_client -connect "127.0.0.1:443" -servername "$BUF_REGISTRY_HOST" \
+             -CAfile "$BUF_TLS_CERT" >/dev/null 2>&1; then
+          up=1; break
+        fi
+        i=$((i+1)); sleep 0.5
+      done
+      if [ "$up" -eq 1 ]; then
+        echo "protobuf: TLS terminator is serving on :443 -> 127.0.0.1:$PORT"
       else
-        echo "protobuf: WARNING the TLS terminator did not start; see /tmp/socat.log" >&2
+        echo "protobuf: WARNING the TLS terminator did not come up; see /tmp/socat.log" >&2
         cat /tmp/socat.log >&2 || true
       fi
     else
