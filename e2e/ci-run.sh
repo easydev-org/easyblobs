@@ -359,17 +359,22 @@ FIXTURE_DIR=""
 # protocol is the WIRE FORMAT (maven, rubygems, nuget, hex), while the fixture is
 # the TOOLCHAIN (java, ruby, dotnet, elixir). Without this map only the protocols
 # whose two names happen to match would ever use a fixture.
+# ONLY mappings whose fixture has been shown to work against that protocol's
+# adapter. Mapping more aggressively looked tidier but made nine jobs fail: a
+# fixture can build a package and still have nowhere to publish it (cran answers
+# PUT with 405, the cpan layout differs, and the jsr/jsrnpm/npm fixtures are
+# written for npm, not for deno or the JSR API).
+#
+# Those protocols keep their hand-written suites until their fixture grows a
+# publish path the adapter actually accepts - which is the honest state, not a
+# mapping that pretends coverage exists.
 fixture_dir_for_protocol() {
   case "$1" in
     maven|gradle|google|clojars|spring|jitpack|ivy) echo java ;;
     rubygems)  echo ruby ;;
     nuget)     echo dotnet ;;
-    hex)       echo elixir ;;
-    cpan)      echo perl ;;
-    cran)      echo r ;;
-    jsrnpm|jsr) echo node ;;
     protobuf)  echo buf ;;
-    pypi|huggingface) echo python ;;
+    pypi)      echo python ;;
     *)         echo "$1" ;;
   esac
 }
