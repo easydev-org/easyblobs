@@ -637,11 +637,14 @@ func (s *State) v1GetCommits(w http.ResponseWriter, r *http.Request, body []byte
 	// twice, and guessing the request shape has cost several rounds - so record
 	// what was actually parsed.
 	if debugOn() {
-		log.Printf("protobuf: GetCommits parsed %d ref(s) from %d body byte(s)", len(refs), len(body))
-		log.Printf("protobuf:   content-type=%q body=%s", contentType, printableBody(body))
+		// ONE line: the harness tails this file, and a second line has already been
+		// lost to the tail window once.
+		detail := ""
 		for i, c := range refs {
-			log.Printf("protobuf:   ref[%d] id=%q owner=%q module=%q", i, c.id, c.owner, c.module)
+			detail += fmt.Sprintf(" [%d id=%q owner=%q module=%q]", i, c.id, c.owner, c.module)
 		}
+		log.Printf("protobuf: GetCommits ct=%q nrefs=%d nbytes=%d body=%s refs=%s",
+			contentType, len(refs), len(body), printableBody(body), detail)
 	}
 	for _, c := range refs {
 		if c.id == "" {
