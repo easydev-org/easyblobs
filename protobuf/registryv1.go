@@ -501,6 +501,53 @@ func (s *State) resolveCommitID(r *http.Request, owner, module, id string) (stri
 	return "", false
 }
 
+// resolveCommitAnywhere resolves a commit id that arrives WITHOUT its module.
+//
+// `buf registry module commit info <host>/<owner>/<repo>:<id>` is decoded by the
+// client into a CommitRef carrying only the id, so restricting the search to a
+// module taken from the request finds nothing and buf reports
+// "expect 1 commit from response, got 0". When owner/module are absent the id is
+// resolved across every module of this format, and the owning module is
+// returned so the response can name it.
+func (s *State) resolveCommitAnywhere(r *http.Request, owner, module, id string) (string, string, string, bool) {
+	if owner != "" && module != "" {
+		if full, ok := s.resolveCommitID(r, owner, module, id); ok {
+			return owner, module, full, true
+		}
+	}
+	repos, err := s.Registry.Meta.ListRepositoriesByFormat(r.Context(), "protobuf")
+	if err != nil {
+		return "", "", "", false
+	}
+	for _, repo := range repos {
+		vs, err := s.Registry.Meta.ListVersions(r.Context(), "protobuf", repo)
+		if err != nil {
+			continue
+		}
+		for _, v := range vs {
+			if v != id && !(len(v) >= len(id) && v[:len(id)] == id) {
+				continue
+			}
+			// repo is "<owner>/<module>"; the module itself may contain slashes.
+			if i := indexByte(repo, '/'); i > 0 {
+				return repo[:i], repo[i+1:], v, true
+			}
+			return owner, repo, v, true
+		}
+	}
+	return "", "", "", false
+}
+
+// indexByte is strings.IndexByte, kept local to avoid another import.
+func indexByte(s string, c byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == c {
+			return i
+		}
+	}
+	return -1
+}
+
 // v1GetCommits makes a pushed commit resolvable, which is how a later read
 // addresses specific content.
 func (s *State) v1GetCommits(w http.ResponseWriter, r *http.Request, body []byte, binary bool) bool {
@@ -579,7 +626,7 @@ func (s *State) v1GetCommits(w http.ResponseWriter, r *http.Request, body []byte
 	commits := make([]map[string]any, 0, len(refs))
 	var out []byte
 	for _, c := range refs {
-		if c.id == "" || c.owner == "" || c.module == "" {
+		if c.id == "" {
 			continue
 		}
 		// The id a client resolves by is the 32-char dashless uuid that our
@@ -587,17 +634,23 @@ func (s *State) v1GetCommits(w http.ResponseWriter, r *http.Request, body []byte
 		// the full 128-char SHAKE256 digest, so an exact Get with the short id
 		// finds nothing and buf reports
 		//   "expect 1 commit from response, got 0"
-		// Match by prefix instead.
-		full, ok := s.resolveCommitID(r, c.owner, c.module, c.id)
+		//
+		// Two request shapes reach here:
+		//   CommitRef.value.id   - only the id, no module
+		//   CommitRef.value.full - module_ref + commit
+		// The id-only form is what `buf registry module commit info <pin>`
+		// produces, so it must work; without a module the id is looked up across
+		// every module of this format.
+		owner, module, full, ok := s.resolveCommitAnywhere(r, c.owner, c.module, c.id)
 		if !ok {
 			continue
 		}
 		commits = append(commits, map[string]any{
-			"id": c.id, "ownerId": c.owner, "moduleId": c.module,
+			"id": c.id, "ownerId": owner, "moduleId": module,
 			"createTime": time.Now().UTC().Format(time.RFC3339),
 		})
 		if binary {
-			out = wireAppendMessage(out, 1, v1CommitWire(c.id, c.owner, c.module, full))
+			out = wireAppendMessage(out, 1, v1CommitWire(c.id, owner, module, full))
 		}
 	}
 	if binary {
