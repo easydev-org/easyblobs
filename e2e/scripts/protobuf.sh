@@ -269,6 +269,19 @@ CFG
   export BUF_CONFIG_DIR
   echo "protobuf: buf global config ($BUF_CONFIG_DIR/config.yaml):"
   cat "$BUF_CONFIG_DIR/config.yaml"
+  # PROVE the config is actually read before trusting it. ReadConfig uses a
+  # STRICT YAML decode, so an unknown key must make buf fail loudly - if it does
+  # not, the file is not being loaded at all and every TLS conclusion drawn from
+  # it would be worthless.
+  probe_dir="$TMP/bufcfg-probe"
+  mkdir -p "$probe_dir"
+  printf 'version: v1\nnot_a_real_key: 1\n' > "$probe_dir/config.yaml"
+  if BUF_CONFIG_DIR="$probe_dir" "$BUF_BIN" --version >"$TMP/probe.log" 2>&1; then
+    echo "protobuf: NOTE buf accepted a config with an unknown key; BUF_CONFIG_DIR may be ignored"
+  else
+    echo "protobuf: strict config decode is active (unknown key rejected):"
+    tail -3 "$TMP/probe.log"
+  fi
 
   cd "$TMP/mod"
   "$BUF_BIN" --version
