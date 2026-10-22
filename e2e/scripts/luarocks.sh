@@ -61,7 +61,12 @@ fi
 cp "$HOME/rocktree/mirror/manifest-5.4" "$HOME/rocktree/mirror/manifest" 2>/dev/null || true
 echo "luarocks: mirror directory:"; ls -la "$HOME/rocktree/mirror" | head -6
 
-mkdir -p $HOME/.luarocks
+# NOTE: leafo/gh-actions-luarocks installs its own config into
+# <workspace>/.luarocks/etc/luarocks/config-5.4.lua, and LUAROCKS_CONFIG from
+# $HOME loses to it. The config is therefore written where the action looks,
+# and LUAROCKS_CONFIG is pointed at that same file.
+LRCONF_DIR="$(pwd)/.luarocks"
+mkdir -p "$LRCONF_DIR"
 # DOUBLE quotes: this is a Lua string that must contain the RESOLVED path. With
 # single quotes the shell wrote the literal "$HOME/rocktree/mirror", so the
 # config pointed at a directory that does not exist and luarocks found nothing:
@@ -69,10 +74,10 @@ mkdir -p $HOME/.luarocks
 printf '%s\n' \
   "rocks_servers = { \"$HOME/rocktree/mirror\" }" \
   'variables = { LUA_INCDIR = "/usr/include/lua5.4" }' \
-  > $HOME/.luarocks/config-5.4.lua
-export LUAROCKS_CONFIG=$HOME/.luarocks/config-5.4.lua
+  > "$LRCONF_DIR/config-5.4.lua"
+export LUAROCKS_CONFIG="$LRCONF_DIR/config-5.4.lua"
 echo "luarocks config:"
-cat $HOME/.luarocks/config-5.4.lua
+cat "$LRCONF_DIR/config-5.4.lua"
 if ! luarocks --lua-version=5.4 \
       install luafilesystem --tree=/tmp/lr-tree 2>&1 | tail -25; then
   echo "luarocks: install failed (see output above)"

@@ -77,11 +77,18 @@ echo "ivy: resolving $PLUGIN_ORG:$PLUGIN_NAME:$PLUGIN_REV through the mount"
 # help text and exit 0 without resolving anything - which is exactly what
 # '-noillustrations' did in the previous run.
 #
-# -novalidate: Ivy otherwise fetches the XSD over the network to validate these
-# documents, and a cold/air-gapped runner makes that fail with
-#   cvc-elt.1.a: Cannot find the declaration of element 'ivysettings'
+# -settings, NOT -ivy.
+#
+# -ivy names a MODULE DESCRIPTOR (ivy.xml), so passing ivysettings.xml there
+# makes Ivy parse a settings document as a module - which is exactly the
+# NullPointerException it kept reporting:
+#   Cannot invoke "ModuleRevisionId.getModuleId()" because "mrid" is null
+#
+# -novalidate: Ivy otherwise fetches the XSD over the network and a cold runner
+# fails with 'cvc-elt.1.a: Cannot find the declaration of element ivysettings'.
 if ! java -jar "$IVY_JAR" \
-      -ivy ivysettings.xml \
+      -settings ivysettings.xml \
+      -ivy ivy.xml \
       -novalidate \
       -retrieve '/tmp/ivywork/lib/[artifact].[ext]' 2>&1 | tail -20; then
   echo "ivy: the resolver failed"
