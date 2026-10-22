@@ -47,6 +47,14 @@ trap 'rm -rf "$TMP"' EXIT
 BUF_REGISTRY_HOST="${BUF_REGISTRY_HOST:-bsr.easyblobs.test}"
 BUF_REGISTRY_PORT="${BUF_REGISTRY_PORT:-${EASYBLOBS_PORT:-8080}}"
 BUF_REGISTRY_ADDR="$BUF_REGISTRY_HOST:$BUF_REGISTRY_PORT"
+# State the resolved values explicitly FIRST. A heredoc is invisible to `sh -x`,
+# so a silently-empty variable produces a buf.yaml with a missing name and no
+# trace of why.
+echo "protobuf: registry host='$BUF_REGISTRY_HOST' port='$BUF_REGISTRY_PORT' addr='$BUF_REGISTRY_ADDR' repo='$REPO'"
+if [ -z "$BUF_REGISTRY_ADDR" ] || [ -z "$REPO" ]; then
+  echo "protobuf: FAIL the registry address or repository name resolved empty" >&2
+  exit 1
+fi
 mkdir -p "$TMP/mod/proto/acme/plugin/v1"
 # buf.yaml v2 rule (straight from the CLI):
 #   "top-level name key cannot be specified if modules are specified, you must
