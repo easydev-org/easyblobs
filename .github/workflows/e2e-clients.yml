@@ -458,7 +458,17 @@ jobs:
           # Print the versions the tools report, so a silently-wrong toolchain is
           # visible in the log rather than only in a later failure.
           for c in node python3 go java mvn ruby; do
-            command -v "$c" >/dev/null 2>&1 && { printf '%-8s ' "$c"; "$c" --version 2>&1 | head -1; }
+            # The `|| true` matters: this job asks easysetup for ONE toolchain, so
+            # most of these names do not exist, and under `set -e` the last
+            # `command -v` returning 1 killed the step with exit 127. That is a
+            # bug in this reporting loop, not in the toolchain - and it hid the
+            # fact that node and python3 had already printed their versions.
+            if command -v "$c" >/dev/null 2>&1; then
+              printf '%-8s ' "$c"
+              "$c" --version 2>&1 | head -1 || true
+            else
+              printf '%-8s (not installed by this matrix entry)\n' "$c"
+            fi
           done
 
       - uses: actions/download-artifact@v4
