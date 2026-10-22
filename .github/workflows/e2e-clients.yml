@@ -410,7 +410,10 @@ jobs:
         include:
           - protocol: node
             tools: "node-26"
-          - protocol: python
+          # The PROTOCOL is pypi (that is the mount's path and the name in
+          # e2e/ci-matrix.tsv); python is only the fixture directory, and
+          # fixture_for() already maps pypi -> python.
+          - protocol: pypi
             tools: "python-3.13"
           - protocol: go
             tools: "go-1.27"
