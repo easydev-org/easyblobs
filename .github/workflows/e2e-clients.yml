@@ -443,6 +443,16 @@ jobs:
           apt-get install -y -qq --no-install-recommends \
             ca-certificates curl git zip unzip build-essential \
             python3 python3-pip jq
+          # Runtime shared libraries the toolchains link against. install.sh
+          # installs each entry's apt_deps, but that runs INSIDE the action and
+          # its apt output is swallowed by the `curl | bash` pipe, so a miss there
+          # only surfaces much later as "libyaml-0.so.2: cannot open shared object
+          # file" from the middle of ruby. Installing them explicitly here makes
+          # the job depend on what it can see, and an easysetup miss shows up as a
+          # harmless duplicate instead of a mystery.
+          apt-get install -y -qq --no-install-recommends \
+            libyaml-0-2 libssl3 zlib1g libffi8 libgmp10 libreadline8 \
+            libbz2-1.0 liblzma5 libsqlite3-0 libatomic1
           echo "build prerequisites present"
 
       - name: prove the toolchain is the easysetup one
@@ -497,11 +507,18 @@ jobs:
       - name: clone the fixture repository
         run: |
           set -eu
+          # Report WHY it failed instead of a bare "required for this job": in a
+          # slim container the usual reasons are a missing git, a missing CA
+          # bundle, or no network - and all three look identical from the exit
+          # status alone.
           if git clone --depth 1 --quiet \
                "https://github.com/${E2E_FIXTURE_REPO}.git" /tmp/fixtures; then
             echo "E2E_FIXTURES=/tmp/fixtures" >> "$GITHUB_ENV"
           else
-            echo "::error::the fixture repository is required for this job"
+            echo "::error::could not clone ${E2E_FIXTURE_REPO}; diagnostics:" >&2
+            { command -v git && git --version; } 2>&1 | sed 's/^/  git: /' >&2 || true
+            ls -l /etc/ssl/certs/ca-certificates.crt 2>&1 | sed 's/^/  ca: /' >&2 || true
+            getent hosts github.com 2>&1 | sed 's/^/  dns: /' >&2 || true
             exit 1
           fi
 
