@@ -62,8 +62,12 @@ cp "$HOME/rocktree/mirror/manifest-5.4" "$HOME/rocktree/mirror/manifest" 2>/dev/
 echo "luarocks: mirror directory:"; ls -la "$HOME/rocktree/mirror" | head -6
 
 mkdir -p $HOME/.luarocks
+# DOUBLE quotes: this is a Lua string that must contain the RESOLVED path. With
+# single quotes the shell wrote the literal "$HOME/rocktree/mirror", so the
+# config pointed at a directory that does not exist and luarocks found nothing:
+#   Error: No results matching query were found for Lua 5.4.
 printf '%s\n' \
-  'rocks_servers = { "$HOME/rocktree/mirror" }' \
+  "rocks_servers = { \"$HOME/rocktree/mirror\" }" \
   'variables = { LUA_INCDIR = "/usr/include/lua5.4" }' \
   > $HOME/.luarocks/config-5.4.lua
 export LUAROCKS_CONFIG=$HOME/.luarocks/config-5.4.lua

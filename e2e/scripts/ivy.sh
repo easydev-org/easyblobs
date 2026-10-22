@@ -52,8 +52,12 @@ cat > ivy.xml <<XML
 XML
 
 # Resolve ONLY against the mount: one URL resolver, no chain to Maven Central.
-# The artifact pattern carries the scala_2.10/sbt_0.13 path segments that this
-# repository actually uses.
+#
+# The patterns must be written in terms of Ivy's TOKEN variables
+# ([organisation]/[module]/[revision]/[type]/[artifact]/[ext]) - not with the
+# values baked in. Baking them in made Ivy fail with
+#   Cannot invoke "ModuleRevisionId.getModuleId()" because "mrid" is null
+# because a pattern with no tokens cannot be turned into a lookup.
 cat > ivysettings.xml <<XML
 <ivysettings
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -61,8 +65,8 @@ cat > ivysettings.xml <<XML
   <settings defaultResolver="easyblobs"/>
   <resolvers>
     <url name="easyblobs" m2compatible="false">
-      <ivy pattern="$IVY_BASE/$PLUGIN_ORG/$PLUGIN_NAME/scala_2.10/sbt_0.13/$PLUGIN_REV/ivys/ivy.xml"/>
-      <artifact pattern="$IVY_BASE/$PLUGIN_ORG/$PLUGIN_NAME/scala_2.10/sbt_0.13/$PLUGIN_REV/[type]s/[artifact].[ext]"/>
+      <ivy pattern="$IVY_BASE/[organisation]/[module]/scala_2.10/sbt_0.13/[revision]/ivys/ivy.xml"/>
+      <artifact pattern="$IVY_BASE/[organisation]/[module]/scala_2.10/sbt_0.13/[revision]/[type]s/[artifact].[ext]"/>
     </url>
   </resolvers>
 </ivysettings>
