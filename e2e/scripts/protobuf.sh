@@ -293,6 +293,24 @@ CFG
     fi
   fi
 
+  # A stronger probe: an INVALID tls.use must be rejected with a message that
+  # names it ("unknown tls.use"). That proves the file is read AND the tls block
+  # is decoded, which the previous probes could not distinguish.
+  bad_dir="$TMP/bufcfg-badtls"
+  mkdir -p "$bad_dir"
+  printf 'version: v1\ntls:\n  use: "not-a-mode"\n' > "$bad_dir/config.yaml"
+  set +e
+  ( cd "$TMP/mod" && BUF_CONFIG_DIR="$bad_dir" "$BUF_BIN" push . >"$TMP/badtls.log" 2>&1 )
+  bad_rc=$?
+  set -e
+  if grep -qi 'unknown tls.use' "$TMP/badtls.log"; then
+    echo "protobuf: tls block IS decoded (an invalid use was rejected):"
+    grep -i 'unknown tls.use' "$TMP/badtls.log" | head -1
+  else
+    echo "protobuf: NOTE buf did not complain about an invalid tls.use (rc=$bad_rc):"
+    tail -3 "$TMP/badtls.log"
+  fi
+
   cd "$TMP/mod"
   "$BUF_BIN" --version
   if [ -n "${EASYBLOBS_TOKEN:-}" ]; then
