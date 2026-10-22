@@ -250,10 +250,16 @@ if [ -n "${BUF_BIN:-}" ] && [ -x "${BUF_BIN}" ]; then
   # which is how this runs without touching the runner's real config.
   BUF_CONFIG_DIR="${BUF_CONFIG_DIR:-$TMP/bufcfg}"
   mkdir -p "$BUF_CONFIG_DIR"
+  # 'use' is a STRING in buf (certclient.ExternalClientTLSConfig{Use string}),
+  # and NewClientTLSConfig matches it with strings.ToLower:
+  #     case "false": return nil, nil
+  # so the value must be QUOTED. A bare `use: false` is a YAML boolean, the
+  # field fails to decode, and buf silently keeps its default (HTTPS) - which is
+  # exactly what happened: the config was written, buf still dialled https.
   cat > "$BUF_CONFIG_DIR/config.yaml" <<'CFG'
 version: v1
 tls:
-  use: false
+  use: "false"
 CFG
   # The variable name is PREFIXED with the app name (appext getDirPath):
   #   dirPath := Env(getAppNameEnvPrefix(appName) + envSuffix)
