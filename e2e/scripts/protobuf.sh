@@ -245,16 +245,16 @@ if [ -n "${BUF_BIN:-}" ] && [ -x "${BUF_BIN}" ]; then
   # The source is "." and the output goes to a FILE so buf's OWN exit status can
   # be checked. 'if buf push | tail' tests tail's status, not buf's, which is how
   # a failing push once printed "succeeded".
-  # Capture to a file AND echo it: a bare redirect hid buf's message once and
-  # the log looked empty, which told us nothing.
+  # Run buf with its output straight to a file, then PRINT the file. Redirecting
+  # to a file first is what makes the exit status buf's own:
   #
-  # NOTE the temporary 'set -o pipefail': piping into tee makes '$?' the status
-  # of TEE, not of buf, which is the same mistake in a new disguise.
+  #   buf push . | tee log        -> '$?' is TEE's status, not buf's
+  #   set -o pipefail             -> NOT supported by dash, which is what
+  #                                  ci-run.sh uses; the script died silently on
+  #                                  it before buf ever ran
   set +e
-  set -o pipefail 2>/dev/null || true
-  "$BUF_BIN" push . 2>&1 | tee "$TMP/bufpush.log"
+  "$BUF_BIN" push . >"$TMP/bufpush.log" 2>&1
   buf_rc=$?
-  set +o pipefail 2>/dev/null || true
   set -e
   echo "protobuf: buf push rc=$buf_rc"
   echo "protobuf: buf push output was:"
