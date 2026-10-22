@@ -269,18 +269,25 @@ CFG
   export BUF_CONFIG_DIR
   echo "protobuf: buf global config ($BUF_CONFIG_DIR/config.yaml):"
   cat "$BUF_CONFIG_DIR/config.yaml"
-  # PROVE the config is actually read before trusting it. ReadConfig uses a
-  # STRICT YAML decode, so an unknown key must make buf fail loudly - if it does
-  # not, the file is not being loaded at all and every TLS conclusion drawn from
-  # it would be worthless.
+  # PROVE the config is actually read before trusting it.
+  #
+  # ReadConfig uses a STRICT YAML decode, so an unknown key must fail. Note the
+  # probe uses 'buf push' and NOT 'buf --version': --version answers before any
+  # config is loaded, so probing with it "passed" for the wrong reason and told
+  # us nothing.
   probe_dir="$TMP/bufcfg-probe"
   mkdir -p "$probe_dir"
   printf 'version: v1\nnot_a_real_key: 1\n' > "$probe_dir/config.yaml"
-  if BUF_CONFIG_DIR="$probe_dir" "$BUF_BIN" --version >"$TMP/probe.log" 2>&1; then
-    echo "protobuf: NOTE buf accepted a config with an unknown key; BUF_CONFIG_DIR may be ignored"
+  if BUF_CONFIG_DIR="$probe_dir" "$BUF_BIN" push . >"$TMP/probe.log" 2>&1; then
+    echo "protobuf: NOTE buf push accepted a config with an unknown key; BUF_CONFIG_DIR is ignored"
   else
-    echo "protobuf: strict config decode is active (unknown key rejected):"
-    tail -3 "$TMP/probe.log"
+    if grep -qi 'configuration' "$TMP/probe.log"; then
+      echo "protobuf: strict config decode IS active (unknown key rejected):"
+      grep -i 'configuration' "$TMP/probe.log" | head -2
+    else
+      echo "protobuf: NOTE the probe failed for another reason, so it proves nothing:"
+      tail -3 "$TMP/probe.log"
+    fi
   fi
 
   cd "$TMP/mod"
