@@ -278,7 +278,10 @@ CFG
   probe_dir="$TMP/bufcfg-probe"
   mkdir -p "$probe_dir"
   printf 'version: v1\nnot_a_real_key: 1\n' > "$probe_dir/config.yaml"
-  if BUF_CONFIG_DIR="$probe_dir" "$BUF_BIN" push . >"$TMP/probe.log" 2>&1; then
+  # Run the probe INSIDE the module dir: otherwise buf fails on "no .proto
+  # files" before it ever reaches the configuration, and the probe measures
+  # nothing (which is exactly what it did last round).
+  if ( cd "$TMP/mod" && BUF_CONFIG_DIR="$probe_dir" "$BUF_BIN" push . >"$TMP/probe.log" 2>&1 ); then
     echo "protobuf: NOTE buf push accepted a config with an unknown key; BUF_CONFIG_DIR is ignored"
   else
     if grep -qi 'configuration' "$TMP/probe.log"; then
