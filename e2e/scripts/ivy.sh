@@ -44,9 +44,12 @@ cat > ivy.xml <<XML
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
     xsi:noNamespaceSchemaLocation="https://ant.apache.org/ivy/schemas/ivy.xsd">
   <info organisation="e2e" module="ivy-e2e"/>
+  <configurations>
+    <conf name="default" visibility="public"/>
+  </configurations>
   <dependencies>
     <dependency org="$PLUGIN_ORG" name="$PLUGIN_NAME" rev="$PLUGIN_REV"
-                conf="default->default"/>
+                conf="default->*"/>
   </dependencies>
 </ivy-module>
 XML

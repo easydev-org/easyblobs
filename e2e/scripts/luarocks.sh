@@ -61,11 +61,11 @@ fi
 cp "$HOME/rocktree/mirror/manifest-5.4" "$HOME/rocktree/mirror/manifest" 2>/dev/null || true
 echo "luarocks: mirror directory:"; ls -la "$HOME/rocktree/mirror" | head -6
 
-# NOTE: leafo/gh-actions-luarocks installs its own config into
-# <workspace>/.luarocks/etc/luarocks/config-5.4.lua, and LUAROCKS_CONFIG from
-# $HOME loses to it. The config is therefore written where the action looks,
-# and LUAROCKS_CONFIG is pointed at that same file.
-LRCONF_DIR="$(pwd)/.luarocks"
+# NOTE: leafo/gh-actions-luarocks installs its own config into the WORKSPACE's
+# .luarocks directory, and that copy wins over $HOME. ci-run.sh runs suites from
+# a temp dir, so "$(pwd)" is not the workspace - use GITHUB_WORKSPACE when it
+# exists, and fall back to $HOME otherwise.
+LRCONF_DIR="${GITHUB_WORKSPACE:-$HOME}/.luarocks"
 mkdir -p "$LRCONF_DIR"
 # DOUBLE quotes: this is a Lua string that must contain the RESOLVED path. With
 # single quotes the shell wrote the literal "$HOME/rocktree/mirror", so the
