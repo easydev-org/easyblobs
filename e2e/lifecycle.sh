@@ -237,13 +237,23 @@ with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
     z.writestr(f"{pref}/go.mod", f"module {mod}\n\ngo 1.21\n")
     z.writestr(f"{pref}/e2e.go", f"package e2e\n\n// body-{stamp}-{ver}\n")
 PY
+    # Verify the archive we built: a malformed zip stores fine but has no
+    # go.mod to extract, and the .mod then falls through to upstream (404).
+    [ -s "$2" ] || fail "could not build the module zip $2"
+    python3 - "$2" "$MOD" <<'PY'
+import sys, zipfile
+path, mod = sys.argv[1], sys.argv[2]
+names = zipfile.ZipFile(path).namelist()
+assert any(n.endswith("/go.mod") for n in names), f"no go.mod in the zip: {names}"
+print("lifecycle/go: module zip has", len(names), "entries; go.mod present")
+PY
   }
 
   gput() { # gput <version> <zipfile>
     with_auth -sS -o /dev/null -w '%{http_code}' -X PUT \
       "$BASE/upload?name=$MOD&version=$1" \
       -H "Content-Type: application/octet-stream" \
-      --data-binary "$2"
+      --data-binary "@$2"
   }
   gget() { # gget <url> <out>
     curl -sS -o "$2" -w '%{http_code}' "$1"
