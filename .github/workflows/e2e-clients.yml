@@ -60,6 +60,10 @@ env:
   BAZEL_VERSION: "8.0.1"
   JENKINS_PLUGIN_MANAGER: "2.12.15"
   SBT_RUNNER_VERSION: "1.10.7"
+  # Real, buildable fixture projects per language. ci-run.sh prefers these over
+  # the hand-written e2e suites when a fixture exists for the protocol, so the
+  # toolchain itself is exercised rather than a purpose-built stub.
+  E2E_FIXTURE_REPO: easydev-org/easyblobs-test
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -348,6 +352,20 @@ jobs:
             echo "EASYBLOBS_DATA=/tmp/eb-data"
           } >> "$GITHUB_ENV"
 
+      - name: clone the fixture repository
+        run: |
+          set -eu
+          # Real, buildable projects per language (easydev-org/easyblobs-test).
+          # ci-run.sh prefers a fixture over the hand-written suite when one
+          # exists for the protocol, so the toolchain itself is exercised.
+          if git clone --depth 1 --quiet \
+               "https://github.com/${E2E_FIXTURE_REPO}.git" /tmp/fixtures; then
+            echo "E2E_FIXTURES=/tmp/fixtures" >> "$GITHUB_ENV"
+            ls /tmp/fixtures | head -30
+          else
+            echo "NOTE: no fixture repository; falling back to the hand-written suites"
+          fi
+
       - name: run the real client
         run: |
           set -u
@@ -416,6 +434,19 @@ jobs:
             echo "EASYBLOBS_ORIGIN=http://127.0.0.1:${EASYBLOBS_PORT}"
             echo "EASYBLOBS_DATA=/tmp/eb-data"
           } >> "$GITHUB_ENV"
+
+      - name: clone the fixture repository
+        run: |
+          set -eu
+          # Inside the distro image: the fixtures are plain source trees, so they
+          # work the same way here.
+          if command -v git >/dev/null && \
+             git clone --depth 1 --quiet \
+               "https://github.com/${E2E_FIXTURE_REPO}.git" /tmp/fixtures; then
+            echo "E2E_FIXTURES=/tmp/fixtures" >> "$GITHUB_ENV"
+          else
+            echo "NOTE: no fixture repository; falling back to the hand-written suites"
+          fi
 
       - name: run the real client
         run: |

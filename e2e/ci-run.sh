@@ -341,6 +341,28 @@ WORK="$(mktemp -d)"
 # Absolute path to the suite: we cd into WORK (some suites write there).
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
+# ---------------------------------------------------------------------------
+# FIXTURES: real projects, cloned from easydev-org/easyblobs-test.
+#
+# The suites under e2e/scripts/ mostly hand-write tiny files, which proves the
+# protocol but not the toolchain: a stub that happens to be parseable is not the
+# same as a project a real compiler accepts. When E2E_FIXTURES points at a
+# checkout of easyblobs-test, the fixture for this protocol is used INSTEAD:
+# its publish.sh builds the project, publishes it through the mount and reads it
+# back, so a failure is a real toolchain or protocol failure.
+#
+# The hand-written suite still runs when no fixture exists for the protocol, so
+# nothing is lost while coverage is being migrated.
+# ---------------------------------------------------------------------------
+FIXTURE_DIR=""
+fixture_for() { # fixture_for <protocol> ; echoes a directory or nothing
+  _root="${E2E_FIXTURES:-}"
+  [ -n "$_root" ] || return 1
+  [ -d "$_root/$1" ] || return 1
+  [ -f "$_root/$1/publish.sh" ] || return 1
+  printf '%s\n' "$_root/$1"
+}
+
 # Several suites used to write to a hard-coded /w, which works in a container
 # (running as root) but not on a GitHub runner (unprivileged user):
 #   mkdir: cannot create directory '/w': Permission denied
@@ -355,7 +377,24 @@ echo "=== e2e/$PROTO (base=$EASYBLOBS_BASE, CAS before: $before files) ==="
 # A per-protocol override (prep_client) wins over the suite's own script when
 # the stock image already ships what the script installs.
 
-if prep_client; then
+# A FIXTURE wins over the hand-written suite: it is a real project, so it proves
+# the toolchain as well as the protocol.
+if FIXTURE_DIR=$(fixture_for "$PROTO"); then
+  echo "(running the easyblobs-test fixture from $FIXTURE_DIR)"
+  # Work in a COPY: the publish scripts create build outputs (node_modules,
+  # target/, dist/) and must not mutate the shared checkout.
+  FIX_WORK="$WORK/fixture"
+  mkdir -p "$FIX_WORK"
+  cp -a "$FIXTURE_DIR/." "$FIX_WORK/"
+  OUT=/tmp/e2e-$PROTO.log
+  if ( cd "$FIX_WORK" && sh -x ./publish.sh ) >"$OUT" 2>&1; then
+    cat "$OUT"
+  else
+    echo "--- FAILED: fixture for $PROTO (last 60 lines, incl. xtrace) ---" >&2
+    tail -60 "$OUT" >&2
+    exit 1
+  fi
+elif prep_client; then
   echo "(used the per-protocol client override)"
 else
   # Capture the suite's output AND its xtrace to one file. Redirecting inside
