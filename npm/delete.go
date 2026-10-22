@@ -99,17 +99,26 @@ func (s *State) reconcileVersions(ctx context.Context, pkg string, doc map[strin
 }
 
 func (s *State) deleteName(w http.ResponseWriter, r *http.Request, name string) {
-	if i := strings.LastIndex(name, "/"); i > 0 {
-		s.removeVersion(r.Context(), name[:i], name[i+1:])
-		easyblobkit.JSON(w, http.StatusOK, map[string]any{"ok": true})
+	// DELETE /<name> removes a WHOLE package - every version.
+	//
+	// The old code split on the last "/" and treated the tail as a version:
+	//   "@e2e/pkg" -> name "@e2e", version "pkg"
+	// so it deleted nothing from "@e2e/pkg" (or, worse, would have attacked a
+	// *different* package named "@e2e") and still answered {"ok": true}. A
+	// scoped npm name ALWAYS contains a slash, so this hit every real package.
+	//
+	// A specific version is deleted through the revision endpoint
+	// (DELETE /<name>/-rev/<rev>), which is handled by rev(), not here.
+	vs, _ := s.Registry.Meta.ListVersions(r.Context(), "npm", name)
+	if len(vs) == 0 {
+		easyblobkit.Error(w, http.StatusNotFound, "package not found")
 		return
 	}
-	vs, _ := s.Registry.Meta.ListVersions(r.Context(), "npm", name)
 	for _, v := range vs {
 		s.removeVersion(r.Context(), name, v)
 	}
 	easyblobkit.LogMetaErr("meta delete", s.Registry.Meta.Delete(r.Context(), "npm", name, ""))
-	easyblobkit.JSON(w, http.StatusOK, map[string]any{"ok": true})
+	easyblobkit.JSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": len(vs)})
 }
 
 func (s *State) removeVersion(ctx context.Context, pkg, version string) {

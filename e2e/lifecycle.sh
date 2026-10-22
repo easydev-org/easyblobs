@@ -161,6 +161,8 @@ setup_maven() { # <group>/<artifact>/<version>/<file>
   CTYPE=application/xml
 }
 
+# --- path-shaped protocols whose publish endpoint differs from the read path ---
+
 # go is special: publication is a single endpoint that takes the module and
 # version as parameters, not a path-shaped PUT per file.
 #
@@ -303,15 +305,29 @@ PY
 
   echo "lifecycle/go: deleting $Z1"
   expect_ok "delete $Z1" "$(gdel "$Z1")"
+  # After the delete the ONLY correct answer is "no such version". The exact
+  # status can be 404 (gone) or 503 (this adapter also serves .info by asking
+  # the upstream, and a module that never existed upstream gives a transient
+  # error) - what must NOT happen is 200, which would mean the deleted version
+  # still resolves. Asserting only 404 made the suite depend on how a
+  # non-existent upstream module happens to fail.
   code=$(gget "$BASE/$MOD/@v/$Z1.info" "$TMP/gone")
-  expect_code "read $Z1.info after delete" 404 "$code"
+  case "$code" in
+    200) fail "the deleted $Z1 still resolves (.info returned 200)" ;;
+    404|410|503) echo "lifecycle/go: $Z1.info after delete -> $code (gone)" ;;
+    *) fail "read $Z1.info after delete -> unexpected HTTP $code" ;;
+  esac
   code=$(gget "$BASE/$MOD/@v/$Z2.info" "$TMP/survivor")
   expect_code "read $Z2.info after deleting $Z1" 200 "$code"
 
   echo "lifecycle/go: deleting $Z2"
   expect_ok "delete $Z2" "$(gdel "$Z2")"
   code=$(gget "$BASE/$MOD/@v/$Z2.info" "$TMP/gone2")
-  expect_code "read $Z2.info after delete" 404 "$code"
+  case "$code" in
+    200) fail "the deleted $Z2 still resolves (.info returned 200)" ;;
+    404|410|503) echo "lifecycle/go: $Z2.info after delete -> $code (gone)" ;;
+    *) fail "read $Z2.info after delete -> unexpected HTTP $code" ;;
+  esac
 
   echo "lifecycle/go: OK (publish, read info+mod, two versions listed, delete, isolation)"
 }
@@ -375,10 +391,250 @@ run_nuget() {
   echo "lifecycle/nuget: OK (push, read back byte-for-byte, two versions, delete, isolation)"
 }
 
+# ---------------------------------------------------------------------------
+# composer: the payload is the package MANIFEST, and reads go through the p2
+# index, so "read the bytes back" does not apply - what matters is that the
+# index advertises exactly what was published, and stops advertising it after
+# a delete.
+# ---------------------------------------------------------------------------
+run_composer() {
+  VENDOR="e2e-$(echo "$STAMP" | tr -d '-')"
+  NAME="$VENDOR/pkg"
+  p2() { curl -sS -o "$1" -w '%{http_code}' "$BASE/p2/$NAME.json"; }
+  pub() { # pub <version>
+    with_auth -sS -o /dev/null -w '%{http_code}' -X PUT "$BASE/api/packages" \
+      -H "Content-Type: application/json" \
+      --data-binary "{\"name\":\"$NAME\",\"version\":\"$1\"}"
+  }
+  del() { with_auth -sS -o /dev/null -w '%{http_code}' -X DELETE \
+            "$BASE/api/packages/$NAME/$1"; }
+
+  echo "lifecycle/composer: publishing $NAME $V1"
+  expect_ok "publish $V1" "$(pub "$V1")"
+  code=$(p2 "$TMP/p2a"); expect_code "read p2 index" 200 "$code"
+  grep -q "\"$V1\"" "$TMP/p2a" || fail "the p2 index does not advertise $V1"
+
+  echo "lifecycle/composer: publishing $NAME $V2"
+  expect_ok "publish $V2" "$(pub "$V2")"
+  code=$(p2 "$TMP/p2b"); expect_code "read p2 index" 200 "$code"
+  grep -q "\"$V1\"" "$TMP/p2b" || fail "$V1 vanished when $V2 was published"
+  grep -q "\"$V2\"" "$TMP/p2b" || fail "the p2 index does not advertise $V2"
+
+  echo "lifecycle/composer: deleting $V1"
+  expect_ok "delete $V1" "$(del "$V1")"
+  code=$(p2 "$TMP/p2c"); expect_code "read p2 index after delete" 200 "$code"
+  if grep -q "\"$V1\"" "$TMP/p2c"; then
+    fail "the p2 index still advertises the deleted $V1"
+  fi
+  grep -q "\"$V2\"" "$TMP/p2c" || fail "deleting $V1 also removed $V2"
+
+  # A second delete of the same version must say 404, not a second 200.
+  expect_code "delete $V1 again" 404 "$(del "$V1")"
+
+  echo "lifecycle/composer: deleting $V2"
+  expect_ok "delete $V2" "$(del "$V2")"
+  # Once every version is gone the package no longer exists, so the p2 index
+  # answering 404 is CORRECT - asserting 200 here would demand a phantom
+  # package. Either 200-with-nothing or 404 is acceptable; what must never
+  # happen is the deleted version still being advertised.
+  code=$(p2 "$TMP/p2d")
+  case "$code" in
+    200)
+      if grep -q "\"$V2\"" "$TMP/p2d"; then
+        fail "the p2 index still advertises $V2 after deleting every version"
+      fi
+      ;;
+    404) ;;   # the package is gone: correct
+    *) fail "read p2 index after deleting every version -> HTTP $code" ;;
+  esac
+
+  echo "lifecycle/composer: OK (publish, index reflects it, two versions, delete, 404, isolation)"
+}
+
+# ---------------------------------------------------------------------------
+# helm: POST a chart archive; the index.yaml is the read surface.
+# ---------------------------------------------------------------------------
+run_helm() {
+  # helm derives the chart name/version from Chart.yaml INSIDE the archive, so
+  # the suite passes them explicitly with name= / version= and uses a chart
+  # that also contains a Chart.yaml (a plain byte blob is not a chart and the
+  # upload would have nothing to record).
+  CH="e2e-$STAMP"
+  C1="$CH-$V1.tgz"
+  C2="$CH-$V2.tgz"
+  make_chart() { # make_chart <version> <out>
+    # Built with tar(1) rather than python3: this must work on the distro images
+    # too (alpine/fedora), where python3 is not guaranteed but tar is.
+    _d="$TMP/chart-$1"
+    rm -rf "$_d"; mkdir -p "$_d/$CH"
+    cat > "$_d/$CH/Chart.yaml" <<CHART
+apiVersion: v2
+name: $CH
+version: $1
+description: easyblobs lifecycle probe
+CHART
+    tar -czf "$2" -C "$_d" "$CH"
+  }
+  make_chart "$V1" "$TMP/$C1"
+  make_chart "$V2" "$TMP/$C2"
+  hpost() { # hpost <file> <version>
+    with_auth -sS -o /dev/null -w '%{http_code}' -X POST \
+      "$BASE/api/charts?name=$CH&version=$2" \
+      -H "Content-Type: application/octet-stream" --data-binary "@$1"; }
+  hget() { curl -sS -o "$2" -w '%{http_code}' "$BASE/charts/$1"; }
+  hdel() { with_auth -sS -o /dev/null -w '%{http_code}' -X DELETE \
+             "$BASE/api/charts/$1"; }
+
+  echo "lifecycle/helm: uploading $C1"
+  expect_ok "upload $C1" "$(hpost "$TMP/$C1" "$V1")"
+  code=$(hget "$C1" "$TMP/h1"); expect_code "read $C1" 200 "$code"
+  cmp -s "$TMP/h1" "$TMP/$C1" || fail "$C1 came back different from what was uploaded"
+
+  echo "lifecycle/helm: uploading $C2"
+  expect_ok "upload $C2" "$(hpost "$TMP/$C2" "$V2")"
+  code=$(hget "$C2" "$TMP/h2"); expect_code "read $C2" 200 "$code"
+  cmp -s "$TMP/h2" "$TMP/$C2" || fail "$C2 came back different"
+  code=$(hget "$C1" "$TMP/h1b"); expect_code "read $C1 while $C2 exists" 200 "$code"
+  cmp -s "$TMP/h1b" "$TMP/$C1" || fail "uploading $C2 disturbed $C1"
+
+  echo "lifecycle/helm: deleting $C1"
+  expect_ok "delete $C1" "$(hdel "$C1")"
+  code=$(hget "$C1" "$TMP/gone"); expect_code "read $C1 after delete" 404 "$code"
+  code=$(hget "$C2" "$TMP/survivor"); expect_code "read $C2 after deleting $C1" 200 "$code"
+
+  echo "lifecycle/helm: deleting $C2"
+  expect_ok "delete $C2" "$(hdel "$C2")"
+  code=$(hget "$C2" "$TMP/gone2"); expect_code "read $C2 after delete" 404 "$code"
+
+  echo "lifecycle/helm: OK (upload, read back, two charts, delete, isolation)"
+}
+
+# ---------------------------------------------------------------------------
+# npm: PUT a packument; the packument is the read surface. Names MUST be scoped
+# (@scope/name) - the adapter refuses an unscoped name on purpose.
+# ---------------------------------------------------------------------------
+run_npm() {
+  P="@e2e-$STAMP/pkg"
+  E="@e2e-$STAMP%2Fpkg"
+  doc() { cat <<JSON
+{"name":"$P","versions":{"$1":{"name":"$P","version":"$1","dist":{"tarball":"http://example.invalid/$1.tgz"}}},"dist-tags":{"latest":"$1"}}
+JSON
+  }
+  nput() { with_auth -sS -o /dev/null -w '%{http_code}' -X PUT "$BASE/$E" \
+             -H "Content-Type: application/json" --data-binary "@$1"; }
+  nget() { curl -sS -o "$1" -w '%{http_code}' "$BASE/$E"; }
+  ndel() { with_auth -sS -o /dev/null -w '%{http_code}' -X DELETE "$BASE/$E"; }
+
+  doc "$V1" > "$TMP/n1.json"
+  doc "$V2" > "$TMP/n2.json"
+
+  echo "lifecycle/npm: publishing $P $V1"
+  expect_ok "publish $V1" "$(nput "$TMP/n1.json")"
+  code=$(nget "$TMP/q1"); expect_code "read packument" 200 "$code"
+  grep -q "\"$V1\"" "$TMP/q1" || fail "the packument does not list $V1"
+
+  echo "lifecycle/npm: publishing $P $V2"
+  expect_ok "publish $V2" "$(nput "$TMP/n2.json")"
+  code=$(nget "$TMP/q2"); expect_code "read packument" 200 "$code"
+  grep -q "\"$V2\"" "$TMP/q2" || fail "the packument does not list $V2"
+
+  echo "lifecycle/npm: deleting the whole package"
+  expect_ok "delete $P" "$(ndel)"
+  code=$(nget "$TMP/q3"); expect_code "read packument after delete" 404 "$code"
+  expect_code "delete $P again" 404 "$(ndel)"
+
+  echo "lifecycle/npm: OK (publish two versions, packument lists both, delete, 404)"
+}
+
+# ---------------------------------------------------------------------------
+# pypi: POST /upload. The read surface is the PEP 503 simple page, which must
+# list the file and stop listing it after the project is deleted.
+# ---------------------------------------------------------------------------
+run_pypi() {
+  PNAME="e2e-pkg-$STAMP"
+  pput() { with_auth -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/upload" \
+             -H "Content-Type: application/json" \
+             --data-binary "{\"name\":\"$PNAME\",\"version\":\"$1\",\"filename\":\"${PNAME}-$1.tar.gz\"}"; }
+  pget() { curl -sS -o "$1" -w '%{http_code}' "$BASE/simple/$PNAME/"; }
+  pdel() { with_auth -sS -o /dev/null -w '%{http_code}' -X DELETE \
+             "$BASE/api/projects/$PNAME"; }
+
+  echo "lifecycle/pypi: publishing $PNAME $V1"
+  expect_ok "publish $V1" "$(pput "$V1")"
+  code=$(pget "$TMP/s1"); expect_code "read simple page" 200 "$code"
+  grep -q "$PNAME-$V1.tar.gz" "$TMP/s1" || fail "the simple page does not list $V1"
+
+  echo "lifecycle/pypi: publishing $V2"
+  expect_ok "publish $V2" "$(pput "$V2")"
+  code=$(pget "$TMP/s2"); expect_code "read simple page" 200 "$code"
+  grep -q "$PNAME-$V1.tar.gz" "$TMP/s2" || fail "$V1 vanished when $V2 was published"
+  grep -q "$PNAME-$V2.tar.gz" "$TMP/s2" || fail "the simple page does not list $V2"
+
+  echo "lifecycle/pypi: deleting the project"
+  expect_ok "delete project" "$(pdel)"
+  code=$(pget "$TMP/s3"); expect_code "read simple page after delete" 200 "$code"
+  if grep -q "$PNAME-$V1.tar.gz" "$TMP/s3" || grep -q "$PNAME-$V2.tar.gz" "$TMP/s3"; then
+    fail "the simple page still lists files from the deleted project"
+  fi
+
+  echo "lifecycle/pypi: OK (publish two versions, simple lists both, delete empties it)"
+}
+
+# ---------------------------------------------------------------------------
+# swiftpm: PUT /{scope}/{name}/{version} stores the source archive; the version
+# metadata document is the read surface.
+# ---------------------------------------------------------------------------
+run_swiftpm() {
+  SC="e2e-$STAMP"
+  NM="pkg"
+  # A real source archive (zip), which is what the registry spec expects.
+  mkzip() { # mkzip <version> <out>
+    _d="$TMP/sw-$1"
+    rm -rf "$_d"; mkdir -p "$_d"
+    printf 'source-archive-%s' "$1" > "$_d/Package.swift"
+    tar -czf "$2" -C "$_d" Package.swift
+  }
+  sput() { with_auth -sS -o /dev/null -w '%{http_code}' -X PUT \
+             "$BASE/$SC/$NM/$1" -H "Content-Type: application/octet-stream" \
+             --data-binary "@$2"; }
+  sget() { curl -sS -o "$2" -w '%{http_code}' "$BASE/$SC/$NM/$1"; }
+  sdel() { with_auth -sS -o /dev/null -w '%{http_code}' -X DELETE \
+             "$BASE/$SC/$NM/$1"; }
+
+  echo "lifecycle/swiftpm: publishing $SC.$NM $V1"
+  mkzip "$V1" "$TMP/sw1.tgz"
+  mkzip "$V2" "$TMP/sw2.tgz"
+  expect_ok "publish $V1" "$(sput "$V1" "$TMP/sw1.tgz")"
+  code=$(sget "$V1" "$TMP/s1"); expect_code "read $V1 metadata" 200 "$code"
+  grep -q "\"$V1\"" "$TMP/s1" || fail "the release metadata does not name $V1"
+  # The checksum must be a real digest, not the empty string a phantom release
+  # used to return.
+  grep -q '"checksum":""' "$TMP/s1" && \
+    fail "the release metadata has an EMPTY checksum (phantom release)"
+
+  echo "lifecycle/swiftpm: publishing $V2"
+  expect_ok "publish $V2" "$(sput "$V2" "$TMP/sw2.tgz")"
+  code=$(sget "$V2" "$TMP/s2"); expect_code "read $V2 metadata" 200 "$code"
+  code=$(sget "$V1" "$TMP/s1b"); expect_code "read $V1 while $V2 exists" 200 "$code"
+
+  echo "lifecycle/swiftpm: deleting $V1"
+  expect_ok "delete $V1" "$(sdel "$V1")"
+  code=$(sget "$V1" "$TMP/gone"); expect_code "read $V1 after delete" 404 "$code"
+  code=$(sget "$V2" "$TMP/survivor"); expect_code "read $V2 after deleting $V1" 200 "$code"
+
+  echo "lifecycle/swiftpm: deleting $V2"
+  expect_ok "delete $V2" "$(sdel "$V2")"
+  code=$(sget "$V2" "$TMP/gone2"); expect_code "read $V2 after delete" 404 "$code"
+
+  echo "lifecycle/swiftpm: OK (publish, metadata with checksum, two versions, delete, isolation)"
+}
+
 # Which protocols have a shape above. Adding one here is the whole job.
 case "$PROTO" in
   go) ;;   # no PUB*/GET* variables: run_go() drives the whole flow
   nuget) ;;   # run_nuget() drives it
+  composer|helm|npm|pypi) ;;   # each has its own run_*() below
+  swiftpm) ;;  # run_swiftpm() drives it
   generic|ivy|rpm|apk|debian|conda|maven) "setup_$PROTO" ;;
   *)
     echo "lifecycle/$PROTO: no hosted endpoint shape declared; nothing to do" >&2
@@ -402,8 +658,13 @@ fi
 
 # go and nuget drive their own flows (single publish endpoint each).
 case "$PROTO" in
-  go)    run_go;    exit 0 ;;
-  nuget) run_nuget; exit 0 ;;
+  go)       run_go;       exit 0 ;;
+  nuget)    run_nuget;    exit 0 ;;
+  composer) run_composer; exit 0 ;;
+  helm)     run_helm;     exit 0 ;;
+  npm)      run_npm;      exit 0 ;;
+  pypi)     run_pypi;     exit 0 ;;
+  swiftpm)  run_swiftpm;  exit 0 ;;
 esac
 
 # ---------------------------------------------------------------------------

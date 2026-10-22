@@ -186,17 +186,39 @@ func (s *State) deleteChart(w http.ResponseWriter, r *http.Request, rest string)
 	if !easyblobkit.AuthorizeWriteScoped(w, r, s.Auth, s.Registry, "helm") {
 		return
 	}
-	parts := strings.Split(rest, "/")
-	name := parts[0]
-	if len(parts) >= 2 {
-		removeVersion(s.Registry, name, parts[1], r.Context())
-	} else {
-		vs, _ := s.Registry.Meta.ListVersions(r.Context(), "helm", name)
-		for _, v := range vs {
+	rest = strings.Trim(rest, "/")
+	if rest == "" {
+		easyblobkit.Error(w, http.StatusBadRequest, "chart required")
+		return
+	}
+
+	// The path is /api/charts/<chart>-<version>.tgz - a FILENAME, not a
+	// "name/version" pair. Uploads always store the archive as
+	// "<name>-<version>.tgz" (see upload), and reads (see chart) look a blob up
+	// BY THAT NAME across every chart. The old code split this on "/" and used
+	// the whole filename as a chart NAME, so ListVersions found nothing, nothing
+	// was deleted, and it still answered {"deleted": true} with 200.
+	//
+	// So: find the chart whose stored blob has this filename, then delete the
+	// matching version(s) — or every version when the name is given without a
+	// version suffix.
+	repos, _ := s.Registry.Meta.ListRepositoriesByFormat(r.Context(), "helm")
+	deleted := 0
+	for _, name := range repos {
+		versions, _ := s.Registry.Meta.ListVersions(r.Context(), "helm", name)
+		for _, v := range versions {
+			if rest != name+"-"+v+".tgz" && rest != name {
+				continue
+			}
 			removeVersion(s.Registry, name, v, r.Context())
+			deleted++
 		}
 	}
-	easyblobkit.JSON(w, http.StatusOK, map[string]any{"deleted": true})
+	if deleted == 0 {
+		easyblobkit.Error(w, http.StatusNotFound, "chart not found")
+		return
+	}
+	easyblobkit.JSON(w, http.StatusOK, map[string]any{"deleted": deleted})
 }
 
 func storeChart(reg *easyblobkit.Registry, name, version, filename string, data []byte, ctx context.Context) {

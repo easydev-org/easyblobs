@@ -430,13 +430,48 @@ func (s *State) deletePackage(w http.ResponseWriter, r *http.Request, rest strin
 	if !easyblobkit.AuthorizeWriteScoped(w, r, s.Auth, s.Registry, "composer") {
 		return
 	}
+	// The path is /api/packages/{vendor}/{package}/{version}. The package NAME
+	// itself contains a slash ("vendor/package"), so the version is the LAST
+	// segment and the name is everything before it - not the whole path.
+	//
+	// The old code took the whole path as the name, so
+	//   ListVersions("composer", "e2e/pkg2/1.0.0")
+	// found nothing, the loop deleted nothing, and the handler still answered
+	// {"ok": true} with 200. The p2 index kept advertising the "deleted"
+	// version, i.e. deletion silently did nothing.
 	full := strings.Trim(rest, "/")
-	full = strings.ReplaceAll(full, "/", "/")
-	vs, _ := s.Registry.Meta.ListVersions(r.Context(), "composer", full)
-	for _, v := range vs {
-		removeVersion(s.Registry, full, v, r.Context())
+	if full == "" {
+		easyblobkit.Error(w, http.StatusBadRequest, "package required")
+		return
 	}
-	easyblobkit.JSON(w, http.StatusOK, map[string]any{"ok": true})
+	// The path may be either
+	//   /api/packages/{vendor}/{package}/{version}   -> delete one release
+	//   /api/packages/{vendor}/{package}             -> delete the package
+	// and the PACKAGE NAME ITSELF contains a slash, so the split cannot be
+	// decided syntactically. Decide by what actually exists, testing the
+	// PACKAGE reading FIRST so that deleting a whole package is not
+	// misinterpreted as deleting a release whose version is the last segment.
+	if vs, _ := s.Registry.Meta.ListVersions(r.Context(), "composer", full); len(vs) > 0 {
+		for _, v := range vs {
+			removeVersion(s.Registry, full, v, r.Context())
+		}
+		easyblobkit.JSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": len(vs)})
+		return
+	}
+
+	// Not a package: the last segment must be a version.
+	idx := strings.LastIndex(full, "/")
+	if idx <= 0 {
+		easyblobkit.Error(w, http.StatusNotFound, "package not found")
+		return
+	}
+	name, version := full[:idx], full[idx+1:]
+	if _, err := s.Registry.Meta.Get(r.Context(), "composer", name, version); err != nil {
+		easyblobkit.Error(w, http.StatusNotFound, "version not found")
+		return
+	}
+	removeVersion(s.Registry, name, version, r.Context())
+	easyblobkit.JSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": version})
 }
 
 func removeVersion(reg *easyblobkit.Registry, name, version string, ctx context.Context) {

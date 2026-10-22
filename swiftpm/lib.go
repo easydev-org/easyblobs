@@ -282,13 +282,21 @@ func (s *State) releases(w http.ResponseWriter, r *http.Request, scope, name, id
 }
 
 func (s *State) versionMeta(w http.ResponseWriter, r *http.Request, id, version string) {
-	checksum, publishedAt := "", ""
-	if art, err := s.Registry.Meta.Get(r.Context(), "swift", id, version); err == nil {
-		if len(art.Blobs) > 0 {
-			checksum = art.Blobs[0].Hex()
-		}
-		publishedAt = easyblobkit.PublishTime(art, time.Time{})
+	// A version that is not in the store must be a 404, not a 200 with an empty
+	// checksum. The old code swallowed the Meta.Get error and answered anyway,
+	// so a DELETED release kept resolving: the client saw a release whose
+	// source archive had no checksum (and, on a real client, an immediate
+	// download failure) instead of "not found".
+	art, err := s.Registry.Meta.Get(r.Context(), "swift", id, version)
+	if err != nil {
+		easyblobkit.Error(w, http.StatusNotFound, "release not found")
+		return
 	}
+	checksum := ""
+	if len(art.Blobs) > 0 {
+		checksum = art.Blobs[0].Hex()
+	}
+	publishedAt := easyblobkit.PublishTime(art, time.Time{})
 	w.Header().Set("Content-Version", "1")
 	easyblobkit.JSON(w, http.StatusOK, map[string]any{
 		"id": id, "version": version,
