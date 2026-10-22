@@ -21,7 +21,7 @@ bytes=$(wc -c </tmp/mod)
 echo "module archive bytes: $bytes"
 [ "$bytes" -gt 1000 ] || { echo "protobuf: suspiciously small module archive"; exit 1; }
 # Compile assertion: `buf build` validates a proto module locally.
-mkdir -p /w/proto && cd /w
+mkdir -p ${E2E_W:-/w}/proto && cd ${E2E_W:-/w}
 cat > buf.yaml <<'X'
 version: v2
 modules:

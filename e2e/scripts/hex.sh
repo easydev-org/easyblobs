@@ -30,8 +30,8 @@ else
   )
 fi
 # Create a project whose dependency is fetched from the mirror, then compile+run.
-rm -rf /w && mix new /w --app w >/dev/null
-cd /w
+rm -rf ${E2E_W:-/w} && mix new ${E2E_W:-/w} --app w >/dev/null
+cd ${E2E_W:-/w}
 cat > mix.exs <<'X'
 defmodule W.MixProject do
   use Mix.Project

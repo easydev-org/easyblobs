@@ -3,8 +3,8 @@
 # sparse index lives at <base>/index/ (config.json + crate entries).
 set -e
 : "${EASYBLOBS_BASE:?EASYBLOBS_BASE not set}"
-mkdir -p /w/src "$CARGO_HOME"
-cd /w
+mkdir -p ${E2E_W:-/w}/src "$CARGO_HOME"
+cd ${E2E_W:-/w}
 cat > "$CARGO_HOME/config.toml" <<X
 [source.crates-io]
 replace-with = "artifact"

@@ -23,9 +23,9 @@ REPO_URL="$EASYBLOBS_BASE/github.com/easyblobs/lfs-e2e.git"
 export GIT_TERMINAL_PROMPT=0
 export GIT_LFS_SKIP_SMUDGE=1
 
-rm -rf /w /lfs-cache
-mkdir -p /w
-cd /w
+rm -rf ${E2E_W:-/w} /lfs-cache
+mkdir -p ${E2E_W:-/w}
+cd ${E2E_W:-/w}
 
 git init --quiet .
 git config user.email e2e@example.invalid

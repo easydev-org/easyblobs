@@ -21,12 +21,12 @@ print("releases:", body[:140])
 PY
 
 # Compile/run assertion: build a Swift binary against the Foundation module.
-mkdir -p /w && cd /w
+mkdir -p /w && cd ${E2E_W:-/w}
 cat > main.swift <<'X'
 import Foundation
 let d = ["ok": true]
 let j = try! JSONSerialization.data(withJSONObject: d)
 print("swift + foundation: " + String(data: j, encoding: .utf8)!)
 X
-swiftc main.swift -o /w/app
-/w/app
+swiftc main.swift -o ${E2E_W:-/w}/app
+${E2E_W:-/w}/app

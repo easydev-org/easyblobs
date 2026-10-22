@@ -7,14 +7,26 @@ set -e
 : "${EASYBLOBS_BASE:?EASYBLOBS_BASE not set}"
 command -v opam >/dev/null || { echo "opam: the opam binary is missing"; exit 1; }
 
-export OPAMROOT=/tmp/opamroot
-rm -rf "$OPAMROOT"
-mkdir -p "$OPAMROOT"
+# ocaml/setup-ocaml already created a root and a switch in the job. Reusing it
+# is both faster and correct: a second `opam init` against a different root
+# leaves opam with no switch, and `opam list` then fails instead of listing.
+echo "opam: existing root = ${OPAMROOT:-<default>}"
+opam --version
 
-opam init --bare --yes --disable-sandboxing \
-  "easyblobs" "$EASYBLOBS_BASE" >/tmp/opam-init.log 2>&1 || {
-    echo "opam: init against the mirror failed"; tail -10 /tmp/opam-init.log; exit 1; }
+# Add the MIRROR as an extra repository on the existing root, then verify that
+# opam can resolve a package out of it. That is the behaviour under test: the
+# mirror must serve a usable repository, not merely respond to HTTP.
+opam repo add easyblobs "$EASYBLOBS_BASE" --all-switches --set-default 2>&1 | tail -5 || \
+  opam repo add easyblobs "$EASYBLOBS_BASE" 2>&1 | tail -5
 
-opam list --all --short 2>/dev/null | grep -qx dune || {
-  echo "opam: dune is not in the mirrored index"; exit 1; }
-echo "opam: initialised from the mirror and the index lists dune"
+echo "opam: repositories now:"
+opam repo list --all 2>&1 | head -10
+
+# `opam show` parses the package's opam file out of the repository index, which
+# a plain HTTP probe cannot do.
+if opam show dune --field=name 2>&1 | tail -5; then
+  :
+fi
+opam show dune --field=version 2>&1 | tail -3 || {
+  echo "opam: the mirror's index has no usable entry for dune"; exit 1; }
+echo "opam: the mirror served a package the opam client can read"

@@ -28,38 +28,38 @@ fi
 # is pointed at a LOCAL directory. That still exercises the mirror for both
 # files - they come from the mount - and it uses luarocks for what it is good
 # at: resolving and building from the manifest.
-mkdir -p /rocktree/mirror
+mkdir -p $HOME/rocktree/mirror
 echo "luarocks: fetching the manifest from the mount with wget"
-wget -q -O /rocktree/mirror/manifest-5.4 "$EASYBLOBS_BASE/manifest-5.4"
-[ -s /rocktree/mirror/manifest-5.4 ] || { echo "luarocks: empty manifest from the mount"; exit 1; }
-echo "luarocks: manifest $(wc -c < /rocktree/mirror/manifest-5.4) bytes from $EASYBLOBS_BASE"
+wget -q -O $HOME/rocktree/mirror/manifest-5.4 "$EASYBLOBS_BASE/manifest-5.4"
+[ -s $HOME/rocktree/mirror/manifest-5.4 ] || { echo "luarocks: empty manifest from the mount"; exit 1; }
+echo "luarocks: manifest $(wc -c < $HOME/rocktree/mirror/manifest-5.4) bytes from $EASYBLOBS_BASE"
 
 # The rocks themselves live under the same mount; rewrite manifest entries that
 # point at the public site so the download also goes through the mirror.
 sed -i "s|https://luarocks.org|$EASYBLOBS_BASE|g; s|http://luarocks.org|$EASYBLOBS_BASE|g" \
-  /rocktree/mirror/manifest-5.4
+  $HOME/rocktree/mirror/manifest-5.4
 
 # Fetch the ROCK ITSELF through the mount as well. luarocks looks for it next to
 # the manifest (rocks_servers = a local dir), and reported
-#   Could not fetch rock file: File not found: /rocktree/mirror/luafilesystem-1.9.0-1.src.rock
+#   Could not fetch rock file: File not found: $HOME/rocktree/mirror/luafilesystem-1.9.0-1.src.rock
 # The manifest names the file, so read the name from it rather than hard-coding.
-ROCK=$(grep -o 'luafilesystem-[0-9.]*-1\.src\.rock' /rocktree/mirror/manifest-5.4 | head -1)
+ROCK=$(grep -o 'luafilesystem-[0-9.]*-1\.src\.rock' $HOME/rocktree/mirror/manifest-5.4 | head -1)
 [ -n "$ROCK" ] || ROCK=luafilesystem-1.9.0-1.src.rock
 echo "luarocks: fetching $ROCK from the mount"
-if wget -q -O "/rocktree/mirror/$ROCK" "$EASYBLOBS_BASE/$ROCK"; then
-  echo "luarocks: $ROCK $(wc -c < /rocktree/mirror/$ROCK) bytes from the mount"
+if wget -q -O "$HOME/rocktree/mirror/$ROCK" "$EASYBLOBS_BASE/$ROCK"; then
+  echo "luarocks: $ROCK $(wc -c < $HOME/rocktree/mirror/$ROCK) bytes from the mount"
 else
   echo "luarocks: the mount does not serve $ROCK"
 fi
 
-mkdir -p /root/.luarocks
+mkdir -p $HOME/.luarocks
 printf '%s\n' \
-  'rocks_servers = { "/rocktree/mirror" }' \
+  'rocks_servers = { "$HOME/rocktree/mirror" }' \
   'variables = { LUA_INCDIR = "/usr/include/lua5.4" }' \
-  > /root/.luarocks/config-5.4.lua
-export LUAROCKS_CONFIG=/root/.luarocks/config-5.4.lua
+  > $HOME/.luarocks/config-5.4.lua
+export LUAROCKS_CONFIG=$HOME/.luarocks/config-5.4.lua
 echo "luarocks config:"
-cat /root/.luarocks/config-5.4.lua
+cat $HOME/.luarocks/config-5.4.lua
 if ! luarocks --lua-version=5.4 \
       install luafilesystem --tree=/tmp/lr-tree 2>&1 | tail -25; then
   echo "luarocks: install failed (see output above)"

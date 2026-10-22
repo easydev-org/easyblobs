@@ -5,7 +5,7 @@ set -e
 cd /tmp
 composer config -g secure-http false
 composer config -g repos.packagist composer "$EASYBLOBS_BASE/"
-mkdir -p /w && cd /w
+mkdir -p ${E2E_W:-/w} && cd ${E2E_W:-/w}
 composer require monolog/monolog --no-interaction --no-progress
 # Run assertion: load the installed library via the generated autoloader.
-php -r 'require "/w/vendor/autoload.php"; $l=new Monolog\Logger("t"); echo "php + monolog: ", get_class($l), "\n";'
+php -r 'require "${E2E_W:-/w}/vendor/autoload.php"; $l=new Monolog\Logger("t"); echo "php + monolog: ", get_class($l), "\n";'

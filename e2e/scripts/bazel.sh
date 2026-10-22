@@ -9,8 +9,8 @@ set -e
 
 command -v bazel >/dev/null || { echo "bazel: the bazel binary is missing"; exit 1; }
 
-rm -rf /w && mkdir -p /w
-cd /w
+rm -rf /w && mkdir -p ${E2E_W:-/w}
+cd ${E2E_W:-/w}
 cat > .bazelrc <<RC
 common --registry=$EASYBLOBS_BASE
 common --enable_bzlmod

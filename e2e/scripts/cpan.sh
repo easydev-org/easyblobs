@@ -8,8 +8,8 @@ set -e
 : "${EASYBLOBS_BASE:?EASYBLOBS_BASE not set}"
 
 # Point CPAN/cpanm at the mirror only.
-mkdir -p /root/.cpan/CPAN
-cat > /root/.cpan/CPAN/MyConfig.pm <<PM
+mkdir -p $HOME/.cpan/CPAN
+cat > $HOME/.cpan/CPAN/MyConfig.pm <<PM
 \$CPAN::Config = {
   'urllist' => ['$EASYBLOBS_BASE'],
   'build_dir' => q[/tmp/cpanbuild],

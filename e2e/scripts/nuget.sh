@@ -2,8 +2,8 @@
 # NuGet: point the package source at the artifact service index.
 set -e
 : "${EASYBLOBS_BASE:?EASYBLOBS_BASE not set}"
-mkdir -p /root/.nuget/NuGet
-cat > /root/.nuget/NuGet/NuGet.Config <<X
+mkdir -p $HOME/.nuget/NuGet
+cat > $HOME/.nuget/NuGet/NuGet.Config <<X
 <?xml version="1.0" encoding="utf-8"?>
 <configuration>
   <packageSources>

@@ -340,6 +340,15 @@ X
 WORK="$(mktemp -d)"
 # Absolute path to the suite: we cd into WORK (some suites write there).
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Several suites used to write to a hard-coded /w, which works in a container
+# (running as root) but not on a GitHub runner (unprivileged user):
+#   mkdir: cannot create directory '/w': Permission denied
+# A symlink cannot fix that - / is not writable on a runner - so the suites now
+# use ${E2E_W:-/w} and the harness exports a writable directory.
+export E2E_W="$WORK/w"
+mkdir -p "$E2E_W"
+
 cd "$WORK"
 
 echo "=== e2e/$PROTO (base=$EASYBLOBS_BASE, CAS before: $before files) ==="

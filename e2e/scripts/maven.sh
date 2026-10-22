@@ -3,7 +3,7 @@
 # goes through the artifact mount. The mount is a Maven-layout repository.
 set -e
 : "${EASYBLOBS_BASE:?EASYBLOBS_BASE not set}"
-mkdir -p /w && cd /w
+mkdir -p /w && cd ${E2E_W:-/w}
 cat > pom.xml <<'X'
 <project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion><groupId>t</groupId><artifactId>t</artifactId><version>1.0</version>
 <dependencies><dependency><groupId>org.slf4j</groupId><artifactId>slf4j-api</artifactId><version>2.0.9</version></dependency></dependencies>
@@ -16,8 +16,8 @@ public class Main {
   }
 }
 X
-mkdir -p /root/.m2
-cat > /root/.m2/settings.xml <<X
+mkdir -p $HOME/.m2
+cat > $HOME/.m2/settings.xml <<X
 <settings>
   <mirrors>
     <mirror>
