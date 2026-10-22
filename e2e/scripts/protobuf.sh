@@ -345,7 +345,10 @@ CFG
   #                                  ci-run.sh uses; the script died silently on
   #                                  it before buf ever ran
   set +e
-  "$BUF_BIN" push . >"$TMP/bufpush.log" 2>&1
+  # --debug makes buf log the requests it actually makes, including the scheme.
+  # That is the only way to see WHICH address/scheme the client chose, instead of
+  # inferring it from an error string.
+  "$BUF_BIN" --debug push . >"$TMP/bufpush.log" 2>&1
   buf_rc=$?
   set -e
   echo "protobuf: buf push rc=$buf_rc"
