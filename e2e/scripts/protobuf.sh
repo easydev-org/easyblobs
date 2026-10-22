@@ -255,9 +255,14 @@ version: v1
 tls:
   use: false
 CFG
-  export CONFIG_DIR="$BUF_CONFIG_DIR"
-  echo "protobuf: buf global config ($CONFIG_DIR/config.yaml):"
-  cat "$CONFIG_DIR/config.yaml"
+  # The variable name is PREFIXED with the app name (appext getDirPath):
+  #   dirPath := Env(getAppNameEnvPrefix(appName) + envSuffix)
+  # so for buf it is BUF_CONFIG_DIR, not CONFIG_DIR. Setting the unprefixed name
+  # silently does nothing, which is exactly what happened: the config file was
+  # written, buf never read it, and buf still dialled with its default scheme.
+  export BUF_CONFIG_DIR
+  echo "protobuf: buf global config ($BUF_CONFIG_DIR/config.yaml):"
+  cat "$BUF_CONFIG_DIR/config.yaml"
 
   cd "$TMP/mod"
   "$BUF_BIN" --version
