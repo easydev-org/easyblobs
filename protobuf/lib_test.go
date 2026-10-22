@@ -53,7 +53,7 @@ func TestConnectPassthrough(t *testing.T) {
 	s := newFixture(t, upstream.URL)
 	s.BSRToken = "configured-token"
 	req := httptest.NewRequest(http.MethodPost,
-		"/artifacts/protobuf/buf.registry.module.v1.ModuleService/GetModules",
+		"/artifacts/protobuf/buf.alpha.registry.v1alpha1.OrganizationService/GetOrganizations",
 		strings.NewReader(`{"moduleRefs":[]}`))
 	req.Header.Set("Authorization", "Bearer caller-token")
 	rec := httptest.NewRecorder()
@@ -61,7 +61,7 @@ func TestConnectPassthrough(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 	}
-	if gotPath != "/buf.registry.module.v1.ModuleService/GetModules" {
+	if gotPath != "/buf.alpha.registry.v1alpha1.OrganizationService/GetOrganizations" {
 		t.Fatalf("upstream path = %q", gotPath)
 	}
 	if gotCT != "application/json" {
@@ -78,7 +78,7 @@ func TestConnectPassthrough(t *testing.T) {
 	// key is service+method+body, not auth).
 	gotPath = ""
 	req2 := httptest.NewRequest(http.MethodPost,
-		"/artifacts/protobuf/buf.registry.module.v1.ModuleService/GetModules",
+		"/artifacts/protobuf/buf.alpha.registry.v1alpha1.OrganizationService/GetOrganizations",
 		strings.NewReader(`{"moduleRefs":[]}`))
 	rec2 := httptest.NewRecorder()
 	s.ServeHTTP(rec2, req2)

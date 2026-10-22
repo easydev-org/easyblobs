@@ -93,6 +93,14 @@ func (s *State) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The STABLE v1 API (buf.registry.module.v1) - what buf 1.4x actually calls
+	// for a push. Its own error names it:
+	//   unimplemented: 404 Not Found for
+	//   https://<host>/buf.registry.module.v1.ModuleService/GetModules
+	if s.serveRegistryV1(w, r, path) {
+		return
+	}
+
 	// A module that was pushed locally must be readable back without going
 	// upstream. buf reads a module through DownloadService/Download, so serve
 	// that from the store when we have the commit/tag.

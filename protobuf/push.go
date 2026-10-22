@@ -54,7 +54,23 @@ import (
 )
 
 // bsrPushService is the fully-qualified service name a buf client calls.
-const bsrPushService = "buf.alpha.registry.v1alpha1.PushService"
+//
+// TWO API generations exist and the CLI we test against uses the NEW one:
+//
+//	buf.alpha.registry.v1alpha1  the original (alpha) API
+//	buf.registry.module.v1       the STABLE v1 API, used by buf >= 1.4x
+//
+// The alpha service names are kept so older clients still work, and the v1
+// names are handled too. Which one buf picks is visible in its own error:
+//
+//	Failure: unimplemented: 404 Not Found for
+//	  https://<host>/buf.registry.module.v1.ModuleService/GetModules
+const (
+	bsrPushService      = "buf.alpha.registry.v1alpha1.PushService"
+	bsrPushServiceV1    = "buf.registry.module.v1.ModuleService"
+	bsrCommitServiceV1  = "buf.registry.module.v1.CommitService"
+	bsrDownloadV1       = "buf.registry.module.v1.DownloadService"
+)
 
 // shake256Hex returns the lowercase hex SHAKE256 digest (64 bytes) of b.
 func shake256Hex(b []byte) string {
