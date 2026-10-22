@@ -447,6 +447,22 @@ CFG
   echo "protobuf: ---"
   if [ "$buf_rc" -eq 0 ]; then
     echo "protobuf: buf push succeeded (exit 0) - the REAL client published here"
+    # Ask buf itself to describe what it just pushed. This exercises
+    # CommitService/GetCommits through the same client, and proves the server and
+    # the client agree about the commit: a push that reports success but stores
+    # something the client cannot resolve back is not a working registry.
+    set +e
+    ( cd "$TMP/mod" && "$BUF_BIN" registry module commit info \
+        "$BUF_REGISTRY_ADDR/acme/$REPO" >"$TMP/commitinfo.log" 2>&1 )
+    info_rc=$?
+    set -e
+    if [ "$info_rc" -eq 0 ]; then
+      echo "protobuf: buf resolved the pushed commit back:"
+      head -6 "$TMP/commitinfo.log"
+    else
+      echo "protobuf: NOTE 'buf registry module commit info' exited $info_rc:"
+      tail -5 "$TMP/commitinfo.log"
+    fi
   else
     # A buf CLI failure is a REAL finding, not something to shrug at: the whole
     # point of this branch is to check what the actual client does with the
