@@ -322,6 +322,18 @@ CFG
     tail -3 "$TMP/badtls.log"
   fi
 
+  # Decisive experiment: tls.use "local" makes buf read <ConfigDir>/tls/root.pem
+  # and FAIL on the missing file. The error names the path it tried, which is
+  # the only way to see which config directory buf really used.
+  local_dir="$TMP/bufcfg-local"
+  mkdir -p "$local_dir"
+  printf 'version: v1\ntls:\n  use: "local"\n' > "$local_dir/config.yaml"
+  set +e
+  ( cd "$TMP/mod" && BUF_CONFIG_DIR="$local_dir" "$BUF_BIN" push . >"$TMP/localtls.log" 2>&1 )
+  set -e
+  echo "protobuf: tls.use=local probe (shows the config path buf resolved):"
+  grep -iE 'root.pem|tls|config' "$TMP/localtls.log" | head -4
+
   cd "$TMP/mod"
   "$BUF_BIN" --version
   # Print what will ACTUALLY be used for the real push. Every probe so far used
