@@ -382,6 +382,138 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
+  # STEP ONE of moving the toolchains onto easysetup.
+  #
+  # easysetup publishes pinned, prebuilt toolchains, so a job can ask for
+  # "node-26 python-3.13" and get exactly those versions instead of relying on
+  # whatever a setup-* action resolves that day. Its artifacts are built for
+  # debian 13 (trixie, glibc 2.41) - and that is a HARD constraint: on an older
+  # glibc every binary dies at the loader. The `clients` job runs on
+  # ubuntu-latest (glibc 2.39), which is exactly why this is a SEPARATE job in a
+  # trixie container rather than a switch flipped for all 42 protocols.
+  #
+  # The point of this job is to prove the whole chain end to end before anything
+  # migrates:
+  #     easysetup installs a toolchain -> THAT toolchain builds a real project
+  #     from easyblobs-test -> it publishes through the mount -> reads it back.
+  # It is deliberately small and does not gate the other jobs.
+  # ---------------------------------------------------------------------------
+  verify-easysetup:
+    needs: [server]
+    runs-on: ubuntu-latest
+    container:
+      # trixie, because easysetup's binaries are linked against its glibc 2.41.
+      image: debian:trixie-slim
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - protocol: node
+            tools: "node-26"
+          - protocol: python
+            tools: "python-3.13"
+          - protocol: go
+            tools: "go-1.27"
+          - protocol: maven
+            tools: "java-21 maven-3.10"
+          - protocol: rubygems
+            tools: "ruby-3.4"
+    steps:
+      - uses: actions/checkout@v4
+
+      # The toolchain comes ENTIRELY from easysetup: no setup-go/setup-node/...,
+      # and no apt package for the language itself.
+      - uses: easydev-org/easysetup@main
+        with:
+          tools: ${{ matrix.tools }}
+
+      # debian:trixie-slim is deliberately bare. easysetup only installs what
+      # ITS INSTALLER needs (curl, xz, python3); everything a build needs at run
+      # time has to be here, or a failure would look like an easysetup problem
+      # when it is a missing library.
+      #   ca-certificates curl git zip unzip  - fetching and unpacking fixtures
+      #   build-essential                     - any native build step
+      #   python3 python3-pip                 - the suites' own helpers
+      #   jq                                  - the suites parse JSON with it
+      - name: install what building a project needs (not the toolchains)
+        run: |
+          set -eu
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends \
+            ca-certificates curl git zip unzip build-essential \
+            python3 python3-pip jq
+          echo "build prerequisites present"
+
+      - name: prove the toolchain is the easysetup one
+        run: |
+          set -eu
+          . /opt/setup/env.sh
+          echo "matrix.tools = ${{ matrix.tools }}"
+          for d in /opt/setup/*/; do
+            [ -d "$d" ] || continue
+            [ -f "$d/.easysetup" ] || continue
+            echo "installed: $(basename "$d")"
+          done
+          # Print the versions the tools report, so a silently-wrong toolchain is
+          # visible in the log rather than only in a later failure.
+          for c in node python3 go java mvn ruby; do
+            command -v "$c" >/dev/null 2>&1 && { printf '%-8s ' "$c"; "$c" --version 2>&1 | head -1; }
+          done
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: easyblobs-bin
+          path: /tmp/bin
+
+      - name: start easyblobs
+        run: |
+          set -eu
+          chmod +x /tmp/bin/easyblobs-bin
+          mkdir -p /tmp/eb-data
+          EASYBLOBS_DEBUG=1 /tmp/bin/easyblobs-bin --listen "0.0.0.0:${EASYBLOBS_PORT}" \
+            --data /tmp/eb-data --self-base "http://127.0.0.1:${EASYBLOBS_PORT}" \
+            >/tmp/easyblobs.log 2>&1 &
+          i=0
+          until curl -fsS --noproxy '*' "http://127.0.0.1:${EASYBLOBS_PORT}/healthz" >/dev/null 2>&1; do
+            i=$((i+1)); [ "$i" -gt 120 ] && { cat /tmp/easyblobs.log; exit 1; }
+            sleep 0.5
+          done
+          {
+            echo "EASYBLOBS_ORIGIN=http://127.0.0.1:${EASYBLOBS_PORT}"
+            echo "EASYBLOBS_DATA=/tmp/eb-data"
+          } >> "$GITHUB_ENV"
+
+      - name: clone the fixture repository
+        run: |
+          set -eu
+          if git clone --depth 1 --quiet \
+               "https://github.com/${E2E_FIXTURE_REPO}.git" /tmp/fixtures; then
+            echo "E2E_FIXTURES=/tmp/fixtures" >> "$GITHUB_ENV"
+          else
+            echo "::error::the fixture repository is required for this job"
+            exit 1
+          fi
+
+      # The payload: the toolchain easysetup installed builds the real project,
+      # publishes through the mount and reads it back.
+      - name: build and publish with the easysetup toolchain
+        run: |
+          set -eu
+          # env.sh is what puts the toolchain on PATH; sourcing it here is the
+          # difference between "easysetup installed node" and "node runs".
+          . /opt/setup/env.sh
+          sh -x e2e/ci-run.sh "${{ matrix.protocol }}"
+
+      - name: upload the server log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: easyblobs-log-easysetup-${{ matrix.protocol }}
+          path: /tmp/easyblobs.log
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
   # The distro package managers: they must run in the userland they test.
   # ---------------------------------------------------------------------------
   distro-clients:
