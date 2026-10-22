@@ -441,9 +441,10 @@ if [ "$cached" -ne 1 ] && readonly_protocol "$PROTO"; then
   # The request-log count was tried here and is NOT reliable: the server log is
   # only echoed on failure, so a passing suite has no log to count.
   echo "=== e2e/$PROTO OK (read-only suite; the client consumed the response, nothing to cache) ==="
-  exit 0
+  # Do NOT exit here: the lifecycle pass below still has to run.
+  cached=2
 fi
-if [ "$cached" -ne 1 ]; then
+if [ "$cached" -eq 0 ]; then
   echo "FAIL: e2e/$PROTO cached nothing (CAS $before->$after files, data $before_bytes->$after_bytes bytes)" >&2
   # A SHRINKING data dir means something deleted the server's storage - a bug
   # in the harness, not in the protocol. Say so plainly.
@@ -467,3 +468,20 @@ if [ "$cached" -ne 1 ]; then
 fi
 
 echo "=== e2e/$PROTO OK (CAS: $before -> $after files; data: $before_bytes -> $after_bytes bytes) ==="
+
+# ---------------------------------------------------------------------------
+# The LIFECYCLE pass.
+#
+# Everything above only proves the mirror SERVES. This proves it can also be
+# PUBLISHED to: create, read back (byte-for-byte), update in place, keep two
+# versions apart, delete one, and confirm the other survived. Protocols with no
+# hosted surface return 77 (skip) and are reported as such, not as passing.
+# ---------------------------------------------------------------------------
+echo "--- lifecycle pass for $PROTO ---"
+life_rc=0
+sh "$REPO/e2e/lifecycle.sh" "$PROTO" || life_rc=$?
+case "$life_rc" in
+  0)  echo "=== e2e/$PROTO lifecycle OK ===" ;;
+  77) echo "=== e2e/$PROTO lifecycle SKIPPED (no hosted surface) ===" ;;
+  *)  echo "FAIL: e2e/$PROTO lifecycle failed (rc=$life_rc)" >&2; exit 1 ;;
+esac
