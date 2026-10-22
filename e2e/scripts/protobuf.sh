@@ -333,6 +333,17 @@ CFG
   set -e
   echo "protobuf: tls.use=local probe (shows the config path buf resolved):"
   grep -iE 'root.pem|tls|config' "$TMP/localtls.log" | head -4
+  # Write every probe result to a summary file that is dumped on failure, so the
+  # findings survive regardless of how the job log interleaves output.
+  {
+    echo "=== buf config probes ==="
+    echo "BUF_CONFIG_DIR=$BUF_CONFIG_DIR"
+    echo "--- real config ---"; cat "$BUF_CONFIG_DIR/config.yaml" 2>&1
+    echo "--- unknown-key probe ---"; tail -3 "$TMP/probe.log" 2>&1
+    echo "--- bad tls.use probe ---"; tail -3 "$TMP/badtls.log" 2>&1
+    echo "--- tls.use=local probe ---"; tail -6 "$TMP/localtls.log" 2>&1
+  } > "$TMP/probes.txt" 2>&1
+  echo "protobuf: probe summary written to $TMP/probes.txt"
 
   cd "$TMP/mod"
   "$BUF_BIN" --version
@@ -392,6 +403,8 @@ CFG
     # mirror. Report the whole log so the reason is visible.
     echo "protobuf: FAIL buf push exited $buf_rc" >&2
     cat "$TMP/bufpush.log" >&2
+    echo "protobuf: === config probe summary ===" >&2
+    cat "$TMP/probes.txt" >&2 2>/dev/null || true
     exit 1
   fi
 fi
