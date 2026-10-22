@@ -258,6 +258,16 @@ jobs:
           # publish path is exercised by the actual client and not only by a
           # hand-built Connect request.
           echo "BUF_BIN=/usr/local/bin/buf" >> "$GITHUB_ENV"
+          # `buf push` takes a SOURCE DIRECTORY, not a URL; the registry comes
+          # from the module name in buf.yaml (<host>/<owner>/<repo>). So the
+          # mirror needs a HOSTNAME the CLI can resolve, pointing at this job's
+          # own server.
+          BSR_HOST="bsr.easyblobs.test"
+          if ! grep -q "$BSR_HOST" /etc/hosts 2>/dev/null; then
+            echo "127.0.0.1 $BSR_HOST" | sudo tee -a /etc/hosts >/dev/null
+          fi
+          getent hosts "$BSR_HOST" || true
+          echo "BUF_REGISTRY_HOST=$BSR_HOST" >> "$GITHUB_ENV"
 
       - uses: r-lib/actions/setup-r@v2
         if: contains(matrix.protocol, 'cran')

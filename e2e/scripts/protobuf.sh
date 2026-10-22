@@ -38,9 +38,15 @@ trap 'rm -rf "$TMP"' EXIT
 
 # Module content: a tiny proto module plus its buf.yaml. This is exactly what a
 # self-written buf plugin package looks like.
+#
+# The module's NAME carries the registry host: `buf push` resolves it from here
+# and calls <host>/buf.alpha.registry.v1alpha1.PushService/... . Naming the
+# mirror as the host is what makes the CLI talk to THIS server.
+BUF_REGISTRY_HOST="${BUF_REGISTRY_HOST:-bsr.easyblobs.test}"
 mkdir -p "$TMP/mod/proto/acme/plugin/v1"
-cat > "$TMP/mod/buf.yaml" <<'YAML'
+cat > "$TMP/mod/buf.yaml" <<YAML
 version: v2
+name: $BUF_REGISTRY_HOST/acme/$REPO
 modules:
   - path: proto
 YAML
@@ -221,33 +227,35 @@ if [ -n "${BUF_BIN:-}" ] && [ -x "${BUF_BIN}" ]; then
   if [ -n "${EASYBLOBS_TOKEN:-}" ]; then
     export BUF_TOKEN="${EASYBLOBS_TOKEN}"
   fi
-  # NOTE: redirect to a FILE, then check buf's own exit status.
+  # HOW buf chooses a registry:
   #
-  # 'if buf push | tail -8' tests TAIL's status, not buf's, so a failing push
-  # prints "succeeded". That mistake already cost several CI rounds elsewhere in
-  # this harness; it is not repeated here.
-  set +e
-  "$BUF_BIN" push "$BASE" >"$TMP/bufpush.log" 2>&1
+  #   buf push <source> [flags]
+  #
+  # The argument is a SOURCE (a directory), NOT a URL:
+  #   Failure: invalid dir path: "http://127.0.0.1:8080/artifacts/protobuf"
+  #
+  # The registry comes from the module NAME in buf.yaml:
+  #   name: buf.build/acme/plugin      -> push to buf.build
+  #   name: <host>/acme/plugin         -> push to <host>
+  #
+  # So pointing the CLI at this mirror means naming it in buf.yaml. The host is
+  # the registry, and this server must be reachable under that name - the
+  # harness sets up a hosts entry for exactly that.
+  #
+  # The source is "." and the output goes to a FILE so buf's OWN exit status can
+  # be checked. 'if buf push | tail' tests tail's status, not buf's, which is how
+  # a failing push once printed "succeeded".
+  "$BUF_BIN" push . >"$TMP/bufpush.log" 2>&1
   buf_rc=$?
-  set -e
-  tail -12 "$TMP/bufpush.log"
+  tail -20 "$TMP/bufpush.log"
   if [ "$buf_rc" -eq 0 ]; then
     echo "protobuf: buf push succeeded (exit 0) - the REAL client published here"
-    # Ask buf to resolve it back, which proves the mirror is a usable BSR.
-    set +e
-    "$BUF_BIN" ls-files "$BASE/acme/$REPO" >"$TMP/bufls.log" 2>&1
-    ls_rc=$?
-    set -e
-    tail -8 "$TMP/bufls.log"
-    if [ "$ls_rc" -eq 0 ]; then
-      echo "protobuf: buf resolved the pushed module back from the mirror"
-    else
-      echo "protobuf: NOTE buf ls-files failed (rc=$ls_rc); push itself succeeded"
-    fi
   else
-    # A buf CLI failure is a real finding, not something to shrug at: the whole
-    # point of this branch is to check what the actual client does.
+    # A buf CLI failure is a REAL finding, not something to shrug at: the whole
+    # point of this branch is to check what the actual client does with the
+    # mirror. Report the whole log so the reason is visible.
     echo "protobuf: FAIL buf push exited $buf_rc" >&2
+    cat "$TMP/bufpush.log" >&2
     exit 1
   fi
 fi
