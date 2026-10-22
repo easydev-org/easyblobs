@@ -477,8 +477,10 @@ CFG
         # beats guessing the message shape again.
         if [ -f /tmp/easyblobs.log ]; then
           echo "protobuf: server view of the GetCommits call:"
-          grep -i 'GetCommits parsed' /tmp/easyblobs.log | tail -4
-          grep -iE 'ref\[0\]' /tmp/easyblobs.log | tail -2
+          # The adapter logs one line per call: ct=..., nrefs=..., body=...
+          grep -i 'GetCommits ct=' /tmp/easyblobs.log | tail -3
+          # And the raw request line, so the content type buf sent is visible.
+          grep -i 'CommitService/GetCommits' /tmp/easyblobs.log | tail -2
         fi
       fi
     fi
