@@ -447,27 +447,33 @@ CFG
   echo "protobuf: ---"
   if [ "$buf_rc" -eq 0 ]; then
     echo "protobuf: buf push succeeded (exit 0) - the REAL client published here"
-    # Ask buf itself to describe what it just pushed. This exercises
-    # CommitService/GetCommits through the same client, and proves the server and
-    # the client agree about the commit: a push that reports success but stores
+    # Ask buf itself to describe what it just pushed: this goes through
+    # CommitService/GetCommits with the same client, and proves the server and the
+    # client agree about the commit. A push that reports success but stores
     # something the client cannot resolve back is not a working registry.
-    set +e
-    # The reference must name a COMMIT, not just the module:
-    #   "does not have a commit specified"
-    # so the module is combined with the label/commit the push created. The push
-    # reported its commit on stdout, so resolve by that.
-    PUSHED_COMMIT=$(sed -n 's/^ *Commit: *//p' "$TMP/bufpush.log" | head -1)
-    [ -n "$PUSHED_COMMIT" ] || PUSHED_COMMIT="main"
-    ( cd "$TMP/mod" && "$BUF_BIN" registry module commit info \
-        "$BUF_REGISTRY_ADDR/acme/$REPO:$PUSHED_COMMIT" >"$TMP/commitinfo.log" 2>&1 )
-    info_rc=$?
-    set -e
-    if [ "$info_rc" -eq 0 ]; then
-      echo "protobuf: buf resolved the pushed commit back:"
-      head -6 "$TMP/commitinfo.log"
+    #
+    # buf prints the full PIN it recorded on stdout, e.g.
+    #   <host>/acme/<repo>:cee45af4d7c9e485ac96c02e62d6da98
+    # and that trailing 32-char id is exactly what `commit info` wants:
+    #   "does not have a commit specified"  <- module alone is not enough
+    #   "expected dashless uuid to be of length 32"  <- it must be the id
+    PIN=$(grep -oE "$BUF_REGISTRY_ADDR/acme/$REPO:[0-9a-f]{32}" "$TMP/bufpush.log" 2>/dev/null | head -1)
+    if [ -z "$PIN" ]; then
+      echo "protobuf: NOTE buf printed no commit pin, so the resolve check is skipped"
     else
-      echo "protobuf: NOTE 'buf registry module commit info' exited $info_rc:"
-      tail -5 "$TMP/commitinfo.log"
+      echo "protobuf: buf recorded $PIN"
+      set +e
+      ( cd "$TMP/mod" && "$BUF_BIN" registry module commit info "$PIN" \
+          >"$TMP/commitinfo.log" 2>&1 )
+      info_rc=$?
+      set -e
+      if [ "$info_rc" -eq 0 ]; then
+        echo "protobuf: buf resolved the pushed commit back:"
+        head -8 "$TMP/commitinfo.log"
+      else
+        echo "protobuf: NOTE 'commit info' exited $info_rc:"
+        tail -5 "$TMP/commitinfo.log"
+      fi
     fi
   else
     # A buf CLI failure is a REAL finding, not something to shrug at: the whole
