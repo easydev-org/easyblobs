@@ -44,11 +44,15 @@ trap 'rm -rf "$TMP"' EXIT
 # mirror as the host is what makes the CLI talk to THIS server.
 BUF_REGISTRY_HOST="${BUF_REGISTRY_HOST:-bsr.easyblobs.test}"
 mkdir -p "$TMP/mod/proto/acme/plugin/v1"
+# buf.yaml v2 rule (straight from the CLI):
+#   "top-level name key cannot be specified if modules are specified, you must
+#    specify the name on each individual module"
+# so the registry host goes on the MODULE, not on the document.
 cat > "$TMP/mod/buf.yaml" <<YAML
 version: v2
-name: $BUF_REGISTRY_HOST/acme/$REPO
 modules:
   - path: proto
+    name: $BUF_REGISTRY_HOST/acme/$REPO
 YAML
 cat > "$TMP/mod/proto/acme/plugin/v1/plugin.proto" <<'PROTO'
 syntax = "proto3";
