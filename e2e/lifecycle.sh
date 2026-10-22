@@ -629,12 +629,134 @@ run_swiftpm() {
   echo "lifecycle/swiftpm: OK (publish, metadata with checksum, two versions, delete, isolation)"
 }
 
+# ---------------------------------------------------------------------------
+# protobuf (BSR): the publish endpoint is PushService/PushManifestAndBlobs and
+# the read endpoint is DownloadService/Download, both Connect unary POSTs whose
+# `bytes` fields are base64 in the JSON encoding.
+#
+# Two pushes of DIFFERENT content must produce DIFFERENT commits (the commit is
+# SHAKE256 over the manifest), and each commit must resolve to its own bytes -
+# that is "two versions stay apart" for a registry that addresses content by
+# digest rather than by a version string.
+# ---------------------------------------------------------------------------
+run_protobuf() {
+  OWNER2="e2e-$STAMP"
+  REPO2="mod"
+
+  mkpush() { # mkpush <version-tag> <out>
+    python3 - "$1" "$TMP/mod-$1" "$2" "$OWNER2" "$REPO2" <<'PY'
+import base64, hashlib, json, os, sys
+
+tag, moddir, out, owner, repo = sys.argv[1:6]
+os.makedirs(moddir + "/proto", exist_ok=True)
+open(moddir + "/buf.yaml", "w").write("version: v2\n")
+open(moddir + "/proto/p.proto", "w").write(
+    f'syntax = "proto3";\npackage e2e.{tag};\nmessage M {{ string v = 1; }}\n')
+
+paths = []
+for root, _, names in os.walk(moddir):
+    for n in names:
+        paths.append(os.path.relpath(os.path.join(root, n), moddir).replace(os.sep, "/"))
+paths.sort()
+
+def shake(b):
+    return hashlib.shake_256(b).digest(64)
+
+blobs, manifest = [], []
+for p in paths:
+    c = open(os.path.join(moddir, p), "rb").read()
+    d = shake(c)
+    manifest.append("shake256:" + d.hex() + "  " + p + "\n")
+    blobs.append({"digest": {"digestType": 1, "digest": base64.b64encode(d).decode()},
+                  "content": base64.b64encode(c).decode()})
+mb = "".join(manifest).encode()
+json.dump({"owner": owner, "repository": repo,
+           "manifest": {"digest": {"digestType": 1,
+                                   "digest": base64.b64encode(shake(mb)).decode()},
+                        "content": base64.b64encode(mb).decode()},
+           "blobs": blobs, "tags": [tag]}, open(out, "w"))
+PY
+  }
+
+  push() { # push <file> ; echoes the commit
+    code=$(with_auth -sS -o "$TMP/pr.json" -w '%{http_code}' -X POST \
+      "$BASE/buf.alpha.registry.v1alpha1.PushService/PushManifestAndBlobs" \
+      -H "Content-Type: application/json" --data-binary "@$1")
+    [ "$code" = "200" ] || { fail "push -> HTTP $code ($(head -c 200 "$TMP/pr.json"))"; }
+    python3 - "$TMP/pr.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+print((d.get("localModulePin") or {}).get("commit", ""))
+PY
+  }
+  download() { # download <reference> <out>
+    python3 - "$OWNER2" "$REPO2" "$1" "$TMP/req.json" <<'PY'
+import json, sys
+o, r, ref, out = sys.argv[1:5]
+json.dump({"owner": o, "repository": r, "reference": ref}, open(out, "w"))
+PY
+    curl -sS -o "$2" -w '%{http_code}' -X POST \
+      "$BASE/buf.alpha.registry.v1alpha1.DownloadService/Download" \
+      -H "Content-Type: application/json" --data-binary "@$TMP/req.json"
+  }
+  fileof() { # fileof <response.json> <path>
+    python3 - "$1" "$2" <<'PY'
+import base64, json, sys
+r = json.load(open(sys.argv[1]))
+for f in (r.get("module") or {}).get("files") or []:
+    if f["path"] == sys.argv[2]:
+        sys.stdout.buffer.write(base64.b64decode(f["content"]))
+        break
+PY
+  }
+
+  mkpush "$V1" "$TMP/p1.json"
+  mkpush "$V2" "$TMP/p2.json"
+
+  echo "lifecycle/protobuf: pushing $OWNER2/$REPO2 ($V1)"
+  C1=$(push "$TMP/p1.json")
+  [ -n "$C1" ] || fail "the first push returned no commit"
+  [ "${#C1}" -eq 128 ] || fail "commit is not a 128-char shake256 digest: $C1"
+
+  code=$(download "$C1" "$TMP/d1.json")
+  expect_code "download commit 1" 200 "$code"
+  fileof "$TMP/d1.json" "proto/p.proto" > "$TMP/got1"
+  cmp -s "$TMP/got1" "$TMP/mod-$V1/proto/p.proto" || \
+    fail "commit 1 does not return the bytes that were pushed"
+
+  echo "lifecycle/protobuf: pushing $OWNER2/$REPO2 ($V2)"
+  C2=$(push "$TMP/p2.json")
+  [ -n "$C2" ] || fail "the second push returned no commit"
+  [ "$C1" != "$C2" ] || fail "two different modules produced the SAME commit"
+
+  code=$(download "$C2" "$TMP/d2.json")
+  expect_code "download commit 2" 200 "$code"
+  fileof "$TMP/d2.json" "proto/p.proto" > "$TMP/got2"
+  cmp -s "$TMP/got2" "$TMP/mod-$V2/proto/p.proto" || \
+    fail "commit 2 does not return the bytes that were pushed"
+
+  # The two commits must remain independent: re-reading the first still gives
+  # the FIRST bytes (content addressing, not last-write-wins).
+  code=$(download "$C1" "$TMP/d1b.json")
+  expect_code "re-download commit 1 after pushing commit 2" 200 "$code"
+  fileof "$TMP/d1b.json" "proto/p.proto" > "$TMP/got1b"
+  cmp -s "$TMP/got1b" "$TMP/mod-$V1/proto/p.proto" || \
+    fail "pushing a second module disturbed the first commit"
+
+  # Pushing identical content again must yield the SAME commit (idempotent).
+  C1again=$(push "$TMP/p1.json")
+  [ "$C1again" = "$C1" ] || fail "re-pushing identical content changed the commit"
+
+  echo "lifecycle/protobuf: OK (push two modules, distinct commits, byte-exact reads, idempotent)"
+}
+
 # Which protocols have a shape above. Adding one here is the whole job.
 case "$PROTO" in
   go) ;;   # no PUB*/GET* variables: run_go() drives the whole flow
   nuget) ;;   # run_nuget() drives it
   composer|helm|npm|pypi) ;;   # each has its own run_*() below
   swiftpm) ;;  # run_swiftpm() drives it
+  protobuf) ;; # run_protobuf() drives it (BSR PushService)
   generic|ivy|rpm|apk|debian|conda|maven) "setup_$PROTO" ;;
   *)
     echo "lifecycle/$PROTO: no hosted endpoint shape declared; nothing to do" >&2
@@ -665,6 +787,7 @@ case "$PROTO" in
   npm)      run_npm;      exit 0 ;;
   pypi)     run_pypi;     exit 0 ;;
   swiftpm)  run_swiftpm;  exit 0 ;;
+  protobuf) run_protobuf; exit 0 ;;
 esac
 
 # ---------------------------------------------------------------------------

@@ -217,16 +217,37 @@ echo "protobuf: OK (pushed a module/plugin and read it back byte-for-byte)"
 if [ -n "${BUF_BIN:-}" ] && [ -x "${BUF_BIN}" ]; then
   echo "protobuf: driving the real buf CLI"
   cd "$TMP/mod"
-  # buf resolves a registry from the module name's host; point it at this server
-  # by using the host directly in buf.yaml/buf.gen-independent form.
   "$BUF_BIN" --version
-  # `buf push` to the mirror. BUF_TOKEN carries the write credential.
   if [ -n "${EASYBLOBS_TOKEN:-}" ]; then
     export BUF_TOKEN="${EASYBLOBS_TOKEN}"
   fi
-  if "$BUF_BIN" push "$BASE" 2>&1 | tail -8; then
-    echo "protobuf: buf push succeeded"
+  # NOTE: redirect to a FILE, then check buf's own exit status.
+  #
+  # 'if buf push | tail -8' tests TAIL's status, not buf's, so a failing push
+  # prints "succeeded". That mistake already cost several CI rounds elsewhere in
+  # this harness; it is not repeated here.
+  set +e
+  "$BUF_BIN" push "$BASE" >"$TMP/bufpush.log" 2>&1
+  buf_rc=$?
+  set -e
+  tail -12 "$TMP/bufpush.log"
+  if [ "$buf_rc" -eq 0 ]; then
+    echo "protobuf: buf push succeeded (exit 0) - the REAL client published here"
+    # Ask buf to resolve it back, which proves the mirror is a usable BSR.
+    set +e
+    "$BUF_BIN" ls-files "$BASE/acme/$REPO" >"$TMP/bufls.log" 2>&1
+    ls_rc=$?
+    set -e
+    tail -8 "$TMP/bufls.log"
+    if [ "$ls_rc" -eq 0 ]; then
+      echo "protobuf: buf resolved the pushed module back from the mirror"
+    else
+      echo "protobuf: NOTE buf ls-files failed (rc=$ls_rc); push itself succeeded"
+    fi
   else
-    echo "protobuf: buf push failed (see above); the HTTP-level publish above still passed"
+    # A buf CLI failure is a real finding, not something to shrug at: the whole
+    # point of this branch is to check what the actual client does.
+    echo "protobuf: FAIL buf push exited $buf_rc" >&2
+    exit 1
   fi
 fi
