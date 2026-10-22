@@ -129,6 +129,7 @@ func main() {
 			continue
 		}
 		if proto == "protobuf" {
+			log.Printf("mounting the BSR API at the host root (proto=%q)", proto)
 			// The BSR's Connect API is addressed at the HOST ROOT:
 			//   POST https://<host>/buf.registry.module.v1.ModuleService/GetModules
 			// because the registry host itself is the API server. `buf push`
@@ -137,20 +138,27 @@ func main() {
 			//   req POST /buf.registry.module.v1.ModuleService/GetModules -> 404
 			// The same handler is mounted here under /artifacts/protobuf, so both
 			// the root-addressed and prefixed forms work.
-			// ServeMux semantics matter here: a pattern WITHOUT a trailing slash
-			// matches only that exact path, so `mux.Handle("/buf.", h)` never
-			// fired for "/buf.registry.module.v1.ModuleService/GetModules" - the
-			// mount silently did nothing and the request still 404'd.
-			// A pattern WITH a trailing slash is the subtree match that is wanted.
+			// ServeMux splits on "/", so neither "/buf." nor "/buf./" can match
+			// "/buf.registry.module.v1.ModuleService/GetModules" - the first is an
+			// exact path, the second wants "/buf./" literally. Measured, not
+			// assumed:
+			//   mux.Handle("/buf./") + POST /buf.registry...  -> 404 page not found
+			// The only way to catch these is the "/" catch-all, which dispatches
+			// by prefix itself.
 			//
-			// NO ScopeMiddlewareForFormat here. That middleware RESOLVES a
-			// repository scope and REWRITES r.URL.Path relative to its base; with
-			// base "/" it stripped the path the handler needed, so the BSR calls
-			// still ended 404 even though the mount matched. The protobuf adapter
-			// reads the full path itself (owner/repository travel in the request
-			// body), so the bare handler is what it wants.
-			mux.Handle("/buf./", handler)
-			mux.Handle("/buf/", handler)
+			// NO ScopeMiddlewareForFormat here either: it resolves a repository
+			// scope and REWRITES r.URL.Path relative to its base; with base "/" it
+			// stripped the path the BSR handler needs. The protobuf adapter reads
+			// the full path itself (owner/repository travel in the request body),
+			// so it gets the bare handler.
+			bsrRoot := handler
+			mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasPrefix(r.URL.Path, "/buf.") || strings.HasPrefix(r.URL.Path, "/buf/") {
+					bsrRoot.ServeHTTP(w, r)
+					return
+				}
+				http.NotFound(w, r)
+			}))
 			// The alpha API's service names look the same ("buf.alpha...."), so
 			// the single subtree pattern above covers both generations.
 			mounted++
