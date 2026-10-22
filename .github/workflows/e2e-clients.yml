@@ -246,20 +246,26 @@ jobs:
           miniforge-version: latest
           activate-environment: e2e
 
-      - uses: ramsey/composer-install@v3
+      - name: install php + composer runtime
         if: contains(matrix.protocol, 'composer')
-
-      - name: install composer's php runtime
-        if: contains(matrix.protocol, 'composer')
+        # ramsey/composer-install is deliberately NOT used: it insists on a
+        # composer.json in the repository, while this suite creates its own
+        # project in a temp directory. setup-php provides composer and php, and
+        # the suite drives them itself - which is what is under test anyway.
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ env.PHP_VERSION }}
+          tools: composer
 
       - name: install sbt runner for ivy
         if: contains(matrix.protocol, 'ivy')
         uses: sbt/setup-sbt@v1
         with:
           sbt-runner-version: ${{ env.SBT_RUNNER_VERSION }}
+          # install-dir has NO default in this action and it rejects an empty
+          # value:
+          #   install-dir must be non-empty and contain only [A-Za-z0-9._/$~-]
+          install-dir: ${{ github.workspace }}/.sbt-runner
 
       - name: install jenkins-plugin-cli
         if: contains(matrix.protocol, 'jenkins')

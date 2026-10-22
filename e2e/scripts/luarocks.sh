@@ -52,6 +52,15 @@ else
   echo "luarocks: the mount does not serve $ROCK"
 fi
 
+# luarocks looks for `manifest-<luaver>` in the server directory and, for a
+# `rocks_servers = { "/dir" }` entry, ALSO rewrites the manifest's download URLs
+# against that same directory. The manifest it fetched from luarocks.org uses
+# absolute https://luarocks.org URLs, which would bypass the mount - so they are
+# rewritten (done above) AND the file is also published under the plain name
+# `manifest`, which luarocks falls back to when the versioned one is missing.
+cp "$HOME/rocktree/mirror/manifest-5.4" "$HOME/rocktree/mirror/manifest" 2>/dev/null || true
+echo "luarocks: mirror directory:"; ls -la "$HOME/rocktree/mirror" | head -6
+
 mkdir -p $HOME/.luarocks
 printf '%s\n' \
   'rocks_servers = { "$HOME/rocktree/mirror" }' \
