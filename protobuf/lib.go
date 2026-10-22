@@ -85,6 +85,21 @@ func (s *State) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		easyblobkit.Error(w, http.StatusNotFound, "not found")
 		return
 	}
+
+	// A LOCAL push is handled here, before the passthrough: publishing to the
+	// public BSR is not what a mirror should do, and until this existed the
+	// adapter could only READ from an upstream.
+	if s.servePush(w, r, path) {
+		return
+	}
+
+	// A module that was pushed locally must be readable back without going
+	// upstream. buf reads a module through DownloadService/Download, so serve
+	// that from the store when we have the commit/tag.
+	if s.serveLocalRead(w, r, path) {
+		return
+	}
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBSRBody))
 	if err != nil {
 		easyblobkit.Error(w, http.StatusBadRequest, "read body: "+err.Error())

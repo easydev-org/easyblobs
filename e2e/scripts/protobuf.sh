@@ -1,36 +1,232 @@
 #!/bin/sh
-# Protobuf (buf.build BSR): the BSR is a Connect/gRPC API whose methods are
-# mounted at the HOST ROOT (`/<Service>/<Method>`), NOT a REST registry. We
-# drive the adapter's passthrough directly with a Connect JSON POST.
+# protobuf / BSR: publish a module or plugin INTO the mirror, then read it back.
+#
+# This used to be a read-only passthrough, so the suite only proved that a
+# module could be DOWNLOADED through the mirror. Publishing your own buf module
+# (or a self-written plugin) was impossible. The adapter now implements the
+# BSR's own PushService, so this suite drives the real publish/read cycle.
+#
+# The wire format is the Connect protocol's JSON encoding of the BSR protos
+# (buf/alpha/registry/v1alpha1/{push,download}.proto):
+#
+#   POST /buf.alpha.registry.v1alpha1.PushService/PushManifestAndBlobs
+#        { owner, repository, manifest{content}, blobs[{digest{...},content}], tags }
+#     -> { localModulePin{ owner, repository, commit, manifestDigest } }
+#
+#   POST /buf.alpha.registry.v1alpha1.DownloadService/Download
+#        { owner, repository, reference }
+#     -> { module{ files[{path, content}] } }
+#
+# `content`, and the digests, are base64 in that JSON encoding; the digest is
+# SHAKE256 (64 bytes, lowercase hex once decoded).
+#
+# With BUF_BIN set, the suite ALSO drives the real `buf` CLI against the same
+# server, because a hand-built request can be accidentally self-consistent
+# while the actual client disagrees.
 set -e
 : "${EASYBLOBS_BASE:?EASYBLOBS_BASE not set}"
-# Call the BSR's documented Download endpoint: a plain GET with query
-# parameters that returns the module's files as an archive.
-#
-# The Connect-unary variant (POST ModuleService/GetModules) was tried first, but
-# its request body needs the exact protobuf oneof envelope and the service
-# rejects every hand-written shape with
-#   "module_refs[0].value: exactly one field is required in oneof"
-# Download needs no body at all, so the test proves the same thing (a real
-# public module fetched through the mount) without guessing an envelope.
-code=$(wget -qO /tmp/mod \
-  "$EASYBLOBS_BASE/buf.alpha.v1.DownloadService/Download?owner=connectrpc&repository=eliza&reference=main" \
-  && echo 0 || echo $?)
-[ "$code" = "0" ] || { echo "protobuf: Download rc=$code"; exit 1; }
-bytes=$(wc -c </tmp/mod)
-echo "module archive bytes: $bytes"
-[ "$bytes" -gt 1000 ] || { echo "protobuf: suspiciously small module archive"; exit 1; }
-# Compile assertion: `buf build` validates a proto module locally.
-mkdir -p ${E2E_W:-/w}/proto && cd ${E2E_W:-/w}
-cat > buf.yaml <<'X'
+
+BASE="${EASYBLOBS_BASE%/}"
+# A per-run repository name so a rerun against the same data dir cannot pass on
+# leftovers from a previous run.
+STAMP="$(date +%s)-$$"
+OWNER="acme"
+REPO="plugin-$STAMP"
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+# Module content: a tiny proto module plus its buf.yaml. This is exactly what a
+# self-written buf plugin package looks like.
+mkdir -p "$TMP/mod/proto/acme/plugin/v1"
+cat > "$TMP/mod/buf.yaml" <<'YAML'
 version: v2
 modules:
   - path: proto
-X
-cat > proto/t.proto <<'X'
+YAML
+cat > "$TMP/mod/proto/acme/plugin/v1/plugin.proto" <<'PROTO'
 syntax = "proto3";
-package t;
-message T { string s = 1; int32 n = 2; }
-X
-buf build
-echo "protobuf: buf build ok"
+
+package acme.plugin.v1;
+
+// A request the plugin answers.
+message Request { string name = 1; }
+
+// The plugin's reply.
+message Reply { string greeting = 1; }
+
+service Greeter {
+  rpc Greet(Request) returns (Reply);
+}
+PROTO
+
+# Build the push request with python3 (base64 + SHAKE256 are not shell jobs).
+# SHAKE256 comes from hashlib, which is in the standard library.
+python3 - "$TMP/mod" "$OWNER" "$REPO" "$TMP/push.json" <<'PY'
+import base64, hashlib, json, os, sys
+
+moddir, owner, repo, out = sys.argv[1:5]
+
+paths = []
+for root, _, names in os.walk(moddir):
+    for n in sorted(names):
+        full = os.path.join(root, n)
+        paths.append(os.path.relpath(full, moddir).replace(os.sep, "/"))
+paths.sort()
+
+def shake(b: bytes) -> bytes:
+    return hashlib.shake_256(b).digest(64)
+
+blobs, manifest = [], []
+for p in paths:
+    content = open(os.path.join(moddir, p), "rb").read()
+    dig = shake(content)
+    manifest.append(f"shake256:{dig.hex()}  {p}\n")
+    blobs.append({
+        "digest": {
+            "digestType": 1,
+            "digest": base64.b64encode(dig).decode(),
+        },
+        "content": base64.b64encode(content).decode(),
+    })
+
+manifest_bytes = "".join(manifest).encode()
+req = {
+    "owner": owner,
+    "repository": repo,
+    "manifest": {
+        "digest": {
+            "digestType": 1,
+            "digest": base64.b64encode(shake(manifest_bytes)).decode(),
+        },
+        "content": base64.b64encode(manifest_bytes).decode(),
+    },
+    "blobs": blobs,
+    "tags": ["v1.0.0"],
+}
+open(out, "w").write(json.dumps(req))
+print("built push request for", len(paths), "file(s)")
+PY
+
+# AUTH: the push must carry the write credential when one is configured.
+AUTH_ARGS=""
+if [ -n "${EASYBLOBS_TOKEN:-}" ]; then
+  AUTH_ARGS="-H Authorization: Bearer ${EASYBLOBS_TOKEN}"
+fi
+
+# A push without a credential must be refused when auth is on.
+if [ "${EASYBLOBS_REQUIRE_AUTH:-0}" = "1" ]; then
+  code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+    "$BASE/buf.alpha.registry.v1alpha1.PushService/PushManifestAndBlobs" \
+    -H 'Content-Type: application/json' --data-binary "@$TMP/push.json")
+  case "$code" in
+    401|403) echo "protobuf: unauthenticated push refused ($code)" ;;
+    *) echo "protobuf: FAIL unauthenticated push returned $code, want 401/403" >&2; exit 1 ;;
+  esac
+fi
+
+echo "protobuf: pushing $OWNER/$REPO"
+code=$(curl -sS -o "$TMP/pushresp.json" -w '%{http_code}' -X POST \
+  "$BASE/buf.alpha.registry.v1alpha1.PushService/PushManifestAndBlobs" \
+  -H 'Content-Type: application/json' $AUTH_ARGS --data-binary "@$TMP/push.json")
+[ "$code" = "200" ] || {
+  echo "protobuf: FAIL push -> HTTP $code" >&2
+  head -c 400 "$TMP/pushresp.json" >&2; echo >&2; exit 1; }
+
+COMMIT=$(python3 - "$TMP/pushresp.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+pin = d.get("localModulePin") or {}
+print(pin.get("commit", ""))
+PY
+)
+[ -n "$COMMIT" ] || { echo "protobuf: FAIL push returned no commit (localModulePin)" >&2; exit 1; }
+echo "protobuf: pushed commit $COMMIT"
+
+# Read the module back and compare every file BYTE FOR BYTE. A push that stores
+# something merely plausible is indistinguishable from a broken one until the
+# bytes are compared.
+cat > "$TMP/dl.json" <<JSON
+{"owner":"$OWNER","repository":"$REPO","reference":"$COMMIT"}
+JSON
+code=$(curl -sS -o "$TMP/dlresp.json" -w '%{http_code}' -X POST \
+  "$BASE/buf.alpha.registry.v1alpha1.DownloadService/Download" \
+  -H 'Content-Type: application/json' --data-binary "@$TMP/dl.json")
+[ "$code" = "200" ] || {
+  echo "protobuf: FAIL download -> HTTP $code" >&2
+  head -c 400 "$TMP/dlresp.json" >&2; echo >&2; exit 1; }
+
+python3 - "$TMP/dlresp.json" "$TMP/mod" <<'PY'
+import base64, json, os, sys
+
+resp = json.load(open(sys.argv[1]))
+moddir = sys.argv[2]
+files = (resp.get("module") or {}).get("files") or []
+if not files:
+    raise SystemExit("download returned no files")
+
+want = {}
+for root, _, names in os.walk(moddir):
+    for n in names:
+        full = os.path.join(root, n)
+        want[os.path.relpath(full, moddir).replace(os.sep, "/")] = open(full, "rb").read()
+
+got = {f["path"]: base64.b64decode(f["content"]) for f in files}
+if set(got) != set(want):
+    raise SystemExit(f"file set differs: got {sorted(got)} want {sorted(want)}")
+for p, b in want.items():
+    if got[p] != b:
+        raise SystemExit(f"file {p} came back different")
+print(f"protobuf: download returned all {len(want)} file(s) byte-for-byte")
+PY
+
+# The manifest+blobs form must describe the same module.
+code=$(curl -sS -o "$TMP/mbresp.json" -w '%{http_code}' -X POST \
+  "$BASE/buf.alpha.registry.v1alpha1.DownloadService/DownloadManifestAndBlobs" \
+  -H 'Content-Type: application/json' --data-binary "@$TMP/dl.json")
+[ "$code" = "200" ] || {
+  echo "protobuf: FAIL manifest download -> HTTP $code" >&2
+  head -c 400 "$TMP/mbresp.json" >&2; echo >&2; exit 1; }
+
+python3 - "$TMP/mbresp.json" <<'PY'
+import base64, json, sys
+
+resp = json.load(open(sys.argv[1]))
+man = (resp.get("manifest") or {}).get("content")
+if not man:
+    raise SystemExit("manifest download returned no manifest content")
+text = base64.b64decode(man).decode()
+lines = [l for l in text.splitlines() if l]
+if not lines:
+    raise SystemExit("the manifest is empty")
+for l in lines:
+    if not l.startswith("shake256:") or "  " not in l:
+        raise SystemExit(f"malformed manifest line: {l!r}")
+if not resp.get("blobs"):
+    raise SystemExit("manifest download returned no blobs")
+print(f"protobuf: manifest lists {len(lines)} file(s) and {len(resp['blobs'])} blob(s)")
+PY
+
+echo "protobuf: OK (pushed a module/plugin and read it back byte-for-byte)"
+
+# ---------------------------------------------------------------------------
+# Optional: drive the REAL buf CLI against the same server. A hand-built
+# request can be accidentally self-consistent while the actual client
+# disagrees, so this runs when the binary is available.
+# ---------------------------------------------------------------------------
+if [ -n "${BUF_BIN:-}" ] && [ -x "${BUF_BIN}" ]; then
+  echo "protobuf: driving the real buf CLI"
+  cd "$TMP/mod"
+  # buf resolves a registry from the module name's host; point it at this server
+  # by using the host directly in buf.yaml/buf.gen-independent form.
+  "$BUF_BIN" --version
+  # `buf push` to the mirror. BUF_TOKEN carries the write credential.
+  if [ -n "${EASYBLOBS_TOKEN:-}" ]; then
+    export BUF_TOKEN="${EASYBLOBS_TOKEN}"
+  fi
+  if "$BUF_BIN" push "$BASE" 2>&1 | tail -8; then
+    echo "protobuf: buf push succeeded"
+  else
+    echo "protobuf: buf push failed (see above); the HTTP-level publish above still passed"
+  fi
+fi

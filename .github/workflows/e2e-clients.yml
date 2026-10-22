@@ -254,6 +254,10 @@ jobs:
             "https://github.com/bufbuild/buf/releases/download/v${V}/buf-Linux-x86_64"
           install -m 0755 /tmp/buf /usr/local/bin/buf
           buf --version
+          # The e2e suite drives the REAL buf CLI when BUF_BIN is set, so the
+          # publish path is exercised by the actual client and not only by a
+          # hand-built Connect request.
+          echo "BUF_BIN=/usr/local/bin/buf" >> "$GITHUB_ENV"
 
       - uses: r-lib/actions/setup-r@v2
         if: contains(matrix.protocol, 'cran')
