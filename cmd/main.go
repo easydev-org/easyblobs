@@ -128,6 +128,22 @@ func main() {
 			mounted++
 			continue
 		}
+		if proto == "protobuf" {
+			// The BSR's Connect API is addressed at the HOST ROOT:
+			//   POST https://<host>/buf.registry.module.v1.ModuleService/GetModules
+			// because the registry host itself is the API server. `buf push`
+			// sends exactly that, so mounting only /artifacts/protobuf made every
+			// call 404:
+			//   req POST /buf.registry.module.v1.ModuleService/GetModules -> 404
+			// The same handler is mounted here under /artifacts/protobuf, so both
+			// the root-addressed and prefixed forms work.
+			// A prefix match is what is wanted: every BSR service name starts
+			// with "buf." (buf.registry.module.v1.*, buf.alpha.registry.*).
+			scoped := easyblobkit.ScopeMiddlewareForFormat("protobuf", "/", handler)
+			mux.Handle("/buf.", scoped)
+			mux.Handle("/buf/", scoped)
+			mounted++
+		}
 		handlers[proto] = handler
 	}
 	if len(handlers) > 0 {

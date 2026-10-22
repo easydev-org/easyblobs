@@ -235,6 +235,56 @@ PY
 echo "protobuf: OK (pushed a module/plugin and read it back byte-for-byte)"
 
 # ---------------------------------------------------------------------------
+# The ROOT-ADDRESSED form, which is what buf actually uses.
+#
+# The BSR API is served at the host root, not under a mount prefix:
+#   POST https://<host>/buf.registry.module.v1.ModuleService/GetModules
+# Mounting only /artifacts/protobuf made every real client call 404:
+#   req POST /buf.registry.module.v1.ModuleService/GetModules -> 404
+# so the same handler is also mounted for /buf.*. Verify THAT shape here, over
+# the same binary encoding (application/proto) buf sends.
+# ---------------------------------------------------------------------------
+ORIGIN="${EASYBLOBS_ORIGIN:-}"
+if [ -n "$ORIGIN" ]; then
+  ORIGIN="${ORIGIN%/}"
+  echo "protobuf: checking the root-addressed BSR API at $ORIGIN"
+  # A hand-built GetModulesRequest in protobuf wire format:
+  #   module_refs{ name{ owner="acme" module="root-probe" } }
+  python3 - "$TMP/rootreq.bin" <<'PY'
+import sys
+def vint(n):
+    out = bytearray()
+    while n >= 0x80:
+        out.append((n & 0x7f) | 0x80); n >>= 7
+    out.append(n)
+    return bytes(out)
+def s(field, v):
+    b = v.encode()
+    return vint(field << 3 | 2) + vint(len(b)) + b
+def msg(field, b):
+    return vint(field << 3 | 2) + vint(len(b)) + b
+name = s(1, "root-probe-owner") + s(2, "root-probe-module")
+ref  = msg(2, name)          # ModuleRef.value.name
+req  = msg(1, ref)           # GetModulesRequest.module_refs
+open(sys.argv[1], "wb").write(req)
+PY
+  code=$(curl -sS -o "$TMP/rootresp.bin" -w '%{http_code}' -X POST \
+    -H 'Content-Type: application/proto' \
+    --data-binary "@$TMP/rootreq.bin" \
+    "$ORIGIN/buf.registry.module.v1.ModuleService/GetModules")
+  [ "$code" = "200" ] || {
+    echo "protobuf: FAIL root-addressed GetModules -> HTTP $code" >&2
+    head -c 200 "$TMP/rootresp.bin" >&2; echo >&2; exit 1; }
+  echo "protobuf: root-addressed GetModules -> 200 (empty response = module absent, as expected)"
+
+  # A non-existent module must NOT be an error: an empty response is what tells
+  # buf to create it.
+  if [ -s "$TMP/rootresp.bin" ]; then
+    echo "protobuf: NOTE the response was not empty; that is fine only if the module already exists"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # Optional: drive the REAL buf CLI against the same server. A hand-built
 # request can be accidentally self-consistent while the actual client
 # disagrees, so this runs when the binary is available.

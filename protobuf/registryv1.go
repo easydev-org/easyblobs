@@ -90,15 +90,23 @@ func (s *State) serveRegistryV1(w http.ResponseWriter, r *http.Request, path str
 		body = b
 	}
 
+	// buf's Connect client sends application/proto - BINARY, not JSON. The
+	// server log is explicit about it:
+	//   req POST /buf.registry.module.v1.ModuleService/GetModules
+	//       ct="application/proto"
+	// so the binary form is decoded here; the JSON form is kept for hand-written
+	// callers and for `curl`-style testing.
+	binary := strings.HasPrefix(r.Header.Get("Content-Type"), "application/proto")
+
 	switch svc + "/" + method {
 	case "ModuleService/GetModules":
-		return s.v1GetModules(w, r, body)
+		return s.v1GetModules(w, r, body, binary)
 	case "ModuleService/CreateModules":
-		return s.v1CreateModules(w, body, r)
+		return s.v1CreateModules(w, body, r, binary)
 	case "UploadService/Upload":
-		return s.v1Upload(w, body, r)
+		return s.v1Upload(w, body, r, binary)
 	case "CommitService/GetCommits":
-		return s.v1GetCommits(w, r, body)
+		return s.v1GetCommits(w, r, body, binary)
 	}
 	// Anything else is not implemented here: fall through to the upstream so a
 	// deployment proxying a real BSR keeps working.
@@ -137,30 +145,121 @@ func v1ModuleJSON(owner, module string) map[string]any {
 	}
 }
 
+// v1ModuleWire renders the same Module message in protobuf wire format.
+//
+// Field numbers from buf/registry/module/v1/module.proto:
+//  1 id, 2 create_time, 3 update_time, 4 name, 5 owner_id,
+//  6 visibility, 7 state, 8 description, 10 default_label_name
+//
+// create_time/update_time are google.protobuf.Timestamp (seconds = 1, nanos = 2);
+// a lenient client only needs them present and parseable.
+func v1ModuleWire(owner, module string) []byte {
+	now := uint64(time.Now().Unix())
+	var ts []byte
+	ts = wireAppendVarintField(ts, 1, now) // seconds
+
+	var b []byte
+	b = wireAppendString(b, 1, owner+"-"+module) // id
+	b = wireAppendMessage(b, 2, ts)              // create_time
+	b = wireAppendMessage(b, 3, ts)              // update_time
+	b = wireAppendString(b, 4, module)           // name
+	b = wireAppendString(b, 5, owner)            // owner_id
+	b = wireAppendVarintField(b, 6, 1)           // visibility = PUBLIC
+	b = wireAppendVarintField(b, 7, 1)           // state = ACTIVE
+	b = wireAppendString(b, 8, "published through easyblobs")
+	b = wireAppendString(b, 10, "main")          // default_label_name
+	return b
+}
+
+// v1CommitWire renders a Commit in wire format.
+//  1 id, 2 create_time, 3 owner_id, 4 module_id, 5 digest
+//  Digest { 1 digest_type (enum), 2 digest (bytes) }
+func v1CommitWire(id, owner, module, manifestHex string) []byte {
+	now := uint64(time.Now().Unix())
+	var ts []byte
+	ts = wireAppendVarintField(ts, 1, now)
+
+	rawDigest, _ := hexDecode(manifestHex)
+	var dig []byte
+	dig = wireAppendVarintField(dig, 1, 1) // DIGEST_TYPE_SHAKE256
+	dig = wireAppendBytes(dig, 2, rawDigest)
+
+	var b []byte
+	b = wireAppendString(b, 1, id)
+	b = wireAppendMessage(b, 2, ts)
+	b = wireAppendString(b, 3, owner)
+	b = wireAppendString(b, 4, module)
+	b = wireAppendMessage(b, 5, dig)
+	return b
+}
+
 // v1GetModules answers "does this module exist?".
 //
 // A module exists when this registry holds at least one pushed commit for it.
 // When it does not, the response must be EMPTY (not an error): that is what
 // tells buf to create it.
-func (s *State) v1GetModules(w http.ResponseWriter, r *http.Request, body []byte) bool {
-	var req struct {
-		ModuleRefs []v1ModuleRef `json:"moduleRefs"`
+func (s *State) v1GetModules(w http.ResponseWriter, r *http.Request, body []byte, binary bool) bool {
+	// GetModulesRequest { repeated ModuleRef module_refs = 1; }
+	// ModuleRef { oneof value { string id = 1; Name name = 2 } }
+	// ModuleRef.Name { string owner = 1; string module = 2 }
+	type ref struct{ owner, module string }
+	var refs []ref
+
+	if binary {
+		fields, err := wireDecode(body)
+		if err != nil {
+			connectError(w, http.StatusBadRequest, "invalid_argument", "decode request: "+err.Error())
+			return true
+		}
+		for _, raw := range allBytes(fields, 1) { // module_refs
+			rf, err := wireDecode(raw)
+			if err != nil {
+				continue
+			}
+			nameRaw := firstBytes(rf, 2) // ModuleRef.name
+			if nameRaw == nil {
+				continue
+			}
+			nf, err := wireDecode(nameRaw)
+			if err != nil {
+				continue
+			}
+			refs = append(refs, ref{owner: firstString(nf, 1), module: firstString(nf, 2)})
+		}
+	} else {
+		var req struct {
+			ModuleRefs []v1ModuleRef `json:"moduleRefs"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			connectError(w, http.StatusBadRequest, "invalid_argument", "decode request: "+err.Error())
+			return true
+		}
+		for _, x := range req.ModuleRefs {
+			refs = append(refs, ref{owner: x.Value.Name.Owner, module: x.Value.Name.Module})
+		}
 	}
-	if err := json.Unmarshal(body, &req); err != nil {
-		connectError(w, http.StatusBadRequest, "invalid_argument", "decode request: "+err.Error())
-		return true
-	}
-	mods := make([]map[string]any, 0, len(req.ModuleRefs))
-	for _, ref := range req.ModuleRefs {
-		owner, module := ref.Value.Name.Owner, ref.Value.Name.Module
-		if owner == "" || module == "" {
+
+	// GetModulesResponse { repeated Module modules = 1; }
+	var out []byte
+	mods := make([]map[string]any, 0, len(refs))
+	for _, rf := range refs {
+		if rf.owner == "" || rf.module == "" {
 			continue
 		}
-		vs, _ := s.Registry.Meta.ListVersions(r.Context(), "protobuf", moduleID(owner, module))
+		vs, _ := s.Registry.Meta.ListVersions(r.Context(), "protobuf", moduleID(rf.owner, rf.module))
 		if len(vs) == 0 {
 			continue
 		}
-		mods = append(mods, v1ModuleJSON(owner, module))
+		m := v1ModuleJSON(rf.owner, rf.module)
+		mods = append(mods, m)
+		if binary {
+			out = wireAppendMessage(out, 1, v1ModuleWire(rf.owner, rf.module))
+		}
+	}
+	if binary {
+		w.Header().Set("Content-Type", "application/proto")
+		_, _ = w.Write(out)
+		return true
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"modules": mods})
@@ -169,30 +268,71 @@ func (s *State) v1GetModules(w http.ResponseWriter, r *http.Request, body []byte
 
 // v1CreateModules registers the module's name. Nothing else is needed: the
 // files arrive through Upload.
-func (s *State) v1CreateModules(w http.ResponseWriter, body []byte, r *http.Request) bool {
+func (s *State) v1CreateModules(w http.ResponseWriter, body []byte, r *http.Request, binary bool) bool {
 	if !easyblobkit.AuthorizeWriteScoped(w, r, s.Auth, s.Registry, "protobuf") {
 		return true
 	}
-	var req struct {
-		Values []struct {
-			Name struct {
-				Owner  string `json:"owner"`
-				Module string `json:"module"`
-			} `json:"name"`
-			Visibility int `json:"visibility"`
-		} `json:"values"`
+	// CreateModulesRequest { repeated CreateModulesRequest.Value values = 1; }
+	// Value { ModuleRef.Name name = 1; visibility = 4 }
+	type name struct{ owner, module string }
+	var names []name
+
+	if binary {
+		fields, err := wireDecode(body)
+		if err != nil {
+			connectError(w, http.StatusBadRequest, "invalid_argument", "decode request: "+err.Error())
+			return true
+		}
+		for _, raw := range allBytes(fields, 1) { // values
+			vf, err := wireDecode(raw)
+			if err != nil {
+				continue
+			}
+			nameRaw := firstBytes(vf, 1) // name
+			if nameRaw == nil {
+				continue
+			}
+			nf, err := wireDecode(nameRaw)
+			if err != nil {
+				continue
+			}
+			names = append(names, name{owner: firstString(nf, 1), module: firstString(nf, 2)})
+		}
+	} else {
+		var req struct {
+			Values []struct {
+				Name struct {
+					Owner  string `json:"owner"`
+					Module string `json:"module"`
+				} `json:"name"`
+				Visibility int `json:"visibility"`
+			} `json:"values"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			connectError(w, http.StatusBadRequest, "invalid_argument", "decode request: "+err.Error())
+			return true
+		}
+		for _, v := range req.Values {
+			names = append(names, name{owner: v.Name.Owner, module: v.Name.Module})
+		}
 	}
-	if err := json.Unmarshal(body, &req); err != nil {
-		connectError(w, http.StatusBadRequest, "invalid_argument", "decode request: "+err.Error())
-		return true
-	}
-	mods := make([]map[string]any, 0, len(req.Values))
-	for _, v := range req.Values {
-		if v.Name.Owner == "" || v.Name.Module == "" {
+
+	mods := make([]map[string]any, 0, len(names))
+	var out []byte
+	for _, n := range names {
+		if n.owner == "" || n.module == "" {
 			connectError(w, http.StatusBadRequest, "invalid_argument", "module name is required")
 			return true
 		}
-		mods = append(mods, v1ModuleJSON(v.Name.Owner, v.Name.Module))
+		mods = append(mods, v1ModuleJSON(n.owner, n.module))
+		if binary {
+			out = wireAppendMessage(out, 1, v1ModuleWire(n.owner, n.module))
+		}
+	}
+	if binary {
+		w.Header().Set("Content-Type", "application/proto")
+		_, _ = w.Write(out)
+		return true
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"modules": mods})
@@ -200,112 +340,232 @@ func (s *State) v1CreateModules(w http.ResponseWriter, body []byte, r *http.Requ
 }
 
 // v1Upload stores the module's files - this is what `buf push` actually sends.
-func (s *State) v1Upload(w http.ResponseWriter, body []byte, r *http.Request) bool {
+func (s *State) v1Upload(w http.ResponseWriter, body []byte, r *http.Request, binary bool) bool {
 	if !easyblobkit.AuthorizeWriteScoped(w, r, s.Auth, s.Registry, "protobuf") {
 		return true
 	}
-	var req struct {
-		Contents []struct {
-			ModuleRef *v1ModuleRef `json:"moduleRef"`
-			Files     []struct {
-				Path    string `json:"path"`
-				Content string `json:"content"` // base64
-			} `json:"files"`
-			SourceControlURL string `json:"sourceControlUrl"`
-		} `json:"contents"`
+	// UploadRequest { repeated Content contents = 1; }
+	// Content { ModuleRef module_ref = 1; repeated File files = 2;
+	//           repeated ScopedLabelRef scoped_label_refs = 3;
+	//           string source_control_url = 4 }
+	// File { string path = 1; bytes content = 2 }
+	type upload struct {
+		owner, module string
+		files         map[string][]byte
 	}
-	if err := json.Unmarshal(body, &req); err != nil {
-		connectError(w, http.StatusBadRequest, "invalid_argument", "decode request: "+err.Error())
-		return true
+	var ups []upload
+
+	if binary {
+		fields, err := wireDecode(body)
+		if err != nil {
+			connectError(w, http.StatusBadRequest, "invalid_argument", "decode request: "+err.Error())
+			return true
+		}
+		for _, raw := range allBytes(fields, 1) { // contents
+			cf, err := wireDecode(raw)
+			if err != nil {
+				continue
+			}
+			var u upload
+			u.files = map[string][]byte{}
+			if refRaw := firstBytes(cf, 1); refRaw != nil { // module_ref
+				if rf, err := wireDecode(refRaw); err == nil {
+					if nameRaw := firstBytes(rf, 2); nameRaw != nil {
+						if nf, err := wireDecode(nameRaw); err == nil {
+							u.owner, u.module = firstString(nf, 1), firstString(nf, 2)
+						}
+					}
+				}
+			}
+			for _, fRaw := range allBytes(cf, 2) { // files
+				ff, err := wireDecode(fRaw)
+				if err != nil {
+					continue
+				}
+				p := firstString(ff, 1)
+				c := firstBytes(ff, 2)
+				if p != "" {
+					u.files[p] = c
+				}
+			}
+			ups = append(ups, u)
+		}
+	} else {
+		var req struct {
+			Contents []struct {
+				ModuleRef *v1ModuleRef `json:"moduleRef"`
+				Files     []struct {
+					Path    string `json:"path"`
+					Content string `json:"content"`
+				} `json:"files"`
+			} `json:"contents"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			connectError(w, http.StatusBadRequest, "invalid_argument", "decode request: "+err.Error())
+			return true
+		}
+		for _, c := range req.Contents {
+			var u upload
+			u.files = map[string][]byte{}
+			if c.ModuleRef != nil {
+				u.owner, u.module = c.ModuleRef.Value.Name.Owner, c.ModuleRef.Value.Name.Module
+			}
+			for _, f := range c.Files {
+				raw, derr := base64.StdEncoding.DecodeString(f.Content)
+				if derr != nil {
+					connectError(w, http.StatusBadRequest, "invalid_argument",
+						fmt.Sprintf("file %q content is not base64: %v", f.Path, derr))
+					return true
+				}
+				if f.Path != "" {
+					u.files[f.Path] = raw
+				}
+			}
+			ups = append(ups, u)
+		}
 	}
-	if len(req.Contents) == 0 {
+
+	if len(ups) == 0 {
 		connectError(w, http.StatusBadRequest, "invalid_argument", "contents is required")
 		return true
 	}
 
-	commits := make([]map[string]any, 0, len(req.Contents))
-	for _, c := range req.Contents {
-		if c.ModuleRef == nil {
-			connectError(w, http.StatusBadRequest, "invalid_argument", "moduleRef is required")
-			return true
-		}
-		owner, module := c.ModuleRef.Value.Name.Owner, c.ModuleRef.Value.Name.Module
-		if owner == "" || module == "" {
+	commits := make([]map[string]any, 0, len(ups))
+	var out []byte
+	for _, u := range ups {
+		if u.owner == "" || u.module == "" {
 			connectError(w, http.StatusBadRequest, "invalid_argument", "moduleRef.name is required")
 			return true
 		}
-		if len(c.Files) == 0 {
+		if len(u.files) == 0 {
 			connectError(w, http.StatusBadRequest, "invalid_argument", "files is required")
 			return true
 		}
-		files := make(map[string][]byte, len(c.Files))
-		for _, f := range c.Files {
-			if f.Path == "" {
-				connectError(w, http.StatusBadRequest, "invalid_argument", "a file has no path")
-				return true
-			}
-			raw, derr := base64.StdEncoding.DecodeString(f.Content)
-			if derr != nil {
-				connectError(w, http.StatusBadRequest, "invalid_argument",
-					fmt.Sprintf("file %q content is not base64: %v", f.Path, derr))
-				return true
-			}
-			files[f.Path] = raw
-		}
-		commit := shake256Hex([]byte(canonicalManifest(files)))
-		if err := s.storePush(r.Context(), moduleID(owner, module), commit, commit, files, nil); err != nil {
+		commit := shake256Hex([]byte(canonicalManifest(u.files)))
+		if err := s.storePush(r.Context(), moduleID(u.owner, u.module), commit, commit, u.files, nil); err != nil {
 			connectError(w, http.StatusInternalServerError, "internal", err.Error())
 			return true
 		}
-		now := time.Now().UTC().Format(time.RFC3339)
-		dig := shake256Hex([]byte(canonicalManifest(files)))
-		rawDig, _ := hexDecode(dig)
 		commits = append(commits, map[string]any{
 			"id":         commit[:32],
-			"createTime": now,
-			"ownerId":    owner,
-			"moduleId":   module,
-			"digest":     map[string]any{"digestType": 1, "digest": base64.StdEncoding.EncodeToString(rawDig)},
+			"createTime": time.Now().UTC().Format(time.RFC3339),
+			"ownerId":    u.owner,
+			"moduleId":   u.module,
+			"digest": map[string]any{
+				"digestType": 1,
+				"digest":     base64.StdEncoding.EncodeToString(hexDecodeOrNil(commit)),
+			},
 		})
+		if binary {
+			out = wireAppendMessage(out, 1, v1CommitWire(commit[:32], u.owner, u.module, commit))
+		}
 	}
 
+	if binary {
+		w.Header().Set("Content-Type", "application/proto")
+		_, _ = w.Write(out)
+		return true
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"commits": commits})
 	return true
 }
 
+// hexDecodeOrNil decodes hex, returning nil on error (used for a best-effort
+// digest in the JSON view).
+func hexDecodeOrNil(s string) []byte {
+	b, err := hexDecode(s)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
 // v1GetCommits makes a pushed commit resolvable, which is how a later read
 // addresses specific content.
-func (s *State) v1GetCommits(w http.ResponseWriter, r *http.Request, body []byte) bool {
-	var req struct {
-		CommitRefs []struct {
-			Value struct {
-				ID   string     `json:"id"`
-				Full *v1ModuleRef `json:"full"`
-			} `json:"value"`
-		} `json:"commitRefs"`
-	}
-	if err := json.Unmarshal(body, &req); err != nil {
-		connectError(w, http.StatusBadRequest, "invalid_argument", "decode request: "+err.Error())
-		return true
-	}
-	commits := make([]map[string]any, 0, len(req.CommitRefs))
-	for _, ref := range req.CommitRefs {
-		id := ref.Value.ID
-		owner, module := "", ""
-		if ref.Value.Full != nil {
-			owner, module = ref.Value.Full.Value.Name.Owner, ref.Value.Full.Value.Name.Module
+func (s *State) v1GetCommits(w http.ResponseWriter, r *http.Request, body []byte, binary bool) bool {
+	// GetCommitsRequest { repeated CommitRef commit_refs = 1; }
+	// CommitRef { oneof value { string id = 1; Full full = 2 } }
+	// CommitRef.Full { ModuleRef module_ref = 1; string commit = 2 }
+	type cref struct{ id, owner, module string }
+	var refs []cref
+
+	if binary {
+		fields, err := wireDecode(body)
+		if err != nil {
+			connectError(w, http.StatusBadRequest, "invalid_argument", "decode request: "+err.Error())
+			return true
 		}
-		if id == "" || owner == "" || module == "" {
+		for _, raw := range allBytes(fields, 1) { // commit_refs
+			cf, err := wireDecode(raw)
+			if err != nil {
+				continue
+			}
+			inner, err := wireDecode(firstBytes(cf, 1)) // value oneof: id or full
+			if err != nil {
+				continue
+			}
+			c := cref{id: firstString(inner, 1)} // id
+			if fullRaw := firstBytes(inner, 2); fullRaw != nil {
+				ff, err := wireDecode(fullRaw)
+				if err == nil {
+					c.module = firstString(ff, 2) // commit
+					if refRaw := firstBytes(ff, 1); refRaw != nil {
+						if rf, err := wireDecode(refRaw); err == nil {
+							if nameRaw := firstBytes(rf, 2); nameRaw != nil {
+								if nf, err := wireDecode(nameRaw); err == nil {
+									c.owner, c.module = firstString(nf, 1), firstString(nf, 2)
+								}
+							}
+						}
+					}
+				}
+			}
+			refs = append(refs, c)
+		}
+	} else {
+		var req struct {
+			CommitRefs []struct {
+				Value struct {
+					ID   string      `json:"id"`
+					Full *v1ModuleRef `json:"full"`
+				} `json:"value"`
+			} `json:"commitRefs"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			connectError(w, http.StatusBadRequest, "invalid_argument", "decode request: "+err.Error())
+			return true
+		}
+		for _, x := range req.CommitRefs {
+			c := cref{id: x.Value.ID}
+			if x.Value.Full != nil {
+				c.owner, c.module = x.Value.Full.Value.Name.Owner, x.Value.Full.Value.Name.Module
+			}
+			refs = append(refs, c)
+		}
+	}
+
+	commits := make([]map[string]any, 0, len(refs))
+	var out []byte
+	for _, c := range refs {
+		if c.id == "" || c.owner == "" || c.module == "" {
 			continue
 		}
-		if _, err := s.Registry.Meta.Get(r.Context(), "protobuf", moduleID(owner, module), id); err != nil {
+		if _, err := s.Registry.Meta.Get(r.Context(), "protobuf", moduleID(c.owner, c.module), c.id); err != nil {
 			continue
 		}
 		commits = append(commits, map[string]any{
-			"id": id, "ownerId": owner, "moduleId": module,
+			"id": c.id, "ownerId": c.owner, "moduleId": c.module,
 			"createTime": time.Now().UTC().Format(time.RFC3339),
 		})
+		if binary {
+			out = wireAppendMessage(out, 1, v1CommitWire(c.id, c.owner, c.module, c.id))
+		}
+	}
+	if binary {
+		w.Header().Set("Content-Type", "application/proto")
+		_, _ = w.Write(out)
+		return true
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"commits": commits})
