@@ -142,9 +142,15 @@ func main() {
 			// fired for "/buf.registry.module.v1.ModuleService/GetModules" - the
 			// mount silently did nothing and the request still 404'd.
 			// A pattern WITH a trailing slash is the subtree match that is wanted.
-			scoped := easyblobkit.ScopeMiddlewareForFormat("protobuf", "/", handler)
-			mux.Handle("/buf./", scoped)
-			mux.Handle("/buf/", scoped)
+			//
+			// NO ScopeMiddlewareForFormat here. That middleware RESOLVES a
+			// repository scope and REWRITES r.URL.Path relative to its base; with
+			// base "/" it stripped the path the handler needed, so the BSR calls
+			// still ended 404 even though the mount matched. The protobuf adapter
+			// reads the full path itself (owner/repository travel in the request
+			// body), so the bare handler is what it wants.
+			mux.Handle("/buf./", handler)
+			mux.Handle("/buf/", handler)
 			// The alpha API's service names look the same ("buf.alpha...."), so
 			// the single subtree pattern above covers both generations.
 			mounted++
