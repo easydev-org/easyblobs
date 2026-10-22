@@ -481,6 +481,26 @@ func hexDecodeOrNil(s string) []byte {
 	return b
 }
 
+// resolveCommitID maps the 32-char id a client sees onto the full stored
+// version.
+//
+// Upload returns commit[:32] as the commit id (buf requires a dashless uuid of
+// exactly 32 chars), while the store keys the version by the full 128-char
+// SHAKE256 digest. A lookup with the short id therefore has to match by prefix.
+func (s *State) resolveCommitID(r *http.Request, owner, module, id string) (string, bool) {
+	repo := moduleID(owner, module)
+	vs, err := s.Registry.Meta.ListVersions(r.Context(), "protobuf", repo)
+	if err != nil {
+		return "", false
+	}
+	for _, v := range vs {
+		if v == id || (len(v) >= len(id) && v[:len(id)] == id) {
+			return v, true
+		}
+	}
+	return "", false
+}
+
 // v1GetCommits makes a pushed commit resolvable, which is how a later read
 // addresses specific content.
 func (s *State) v1GetCommits(w http.ResponseWriter, r *http.Request, body []byte, binary bool) bool {
@@ -505,19 +525,30 @@ func (s *State) v1GetCommits(w http.ResponseWriter, r *http.Request, body []byte
 			if err != nil {
 				continue
 			}
-			c := cref{id: firstString(inner, 1)} // id
+			// CommitRef.value { string id = 1; Full full = 2 }
+			// CommitRef.Full { ModuleRef module_ref = 1; string commit = 2 }
+			c := cref{id: firstString(inner, 1)} // the direct-id form
 			if fullRaw := firstBytes(inner, 2); fullRaw != nil {
 				ff, err := wireDecode(fullRaw)
-				if err == nil {
-					c.module = firstString(ff, 2) // commit
-					if refRaw := firstBytes(ff, 1); refRaw != nil {
-						if rf, err := wireDecode(refRaw); err == nil {
-							if nameRaw := firstBytes(rf, 2); nameRaw != nil {
-								if nf, err := wireDecode(nameRaw); err == nil {
-									c.owner, c.module = firstString(nf, 1), firstString(nf, 2)
-								}
-							}
+				if err != nil {
+					continue
+				}
+				// The COMMIT id is Full.commit (field 2). It must not be
+				// overwritten by the module name read below - the earlier version
+				// wrote both into c.module and the id was lost, so every lookup
+				// found nothing.
+				c.id = firstString(ff, 2)
+				if refRaw := firstBytes(ff, 1); refRaw != nil { // module_ref
+					rf, err := wireDecode(refRaw)
+					if err != nil {
+						continue
+					}
+					if nameRaw := firstBytes(rf, 2); nameRaw != nil { // ModuleRef.value.name
+						nf, err := wireDecode(nameRaw)
+						if err != nil {
+							continue
 						}
+						c.owner, c.module = firstString(nf, 1), firstString(nf, 2)
 					}
 				}
 			}
@@ -551,7 +582,14 @@ func (s *State) v1GetCommits(w http.ResponseWriter, r *http.Request, body []byte
 		if c.id == "" || c.owner == "" || c.module == "" {
 			continue
 		}
-		if _, err := s.Registry.Meta.Get(r.Context(), "protobuf", moduleID(c.owner, c.module), c.id); err != nil {
+		// The id a client resolves by is the 32-char dashless uuid that our
+		// Upload response returned (commit[:32]). The STORE keys the version by
+		// the full 128-char SHAKE256 digest, so an exact Get with the short id
+		// finds nothing and buf reports
+		//   "expect 1 commit from response, got 0"
+		// Match by prefix instead.
+		full, ok := s.resolveCommitID(r, c.owner, c.module, c.id)
+		if !ok {
 			continue
 		}
 		commits = append(commits, map[string]any{
@@ -559,7 +597,7 @@ func (s *State) v1GetCommits(w http.ResponseWriter, r *http.Request, body []byte
 			"createTime": time.Now().UTC().Format(time.RFC3339),
 		})
 		if binary {
-			out = wireAppendMessage(out, 1, v1CommitWire(c.id, c.owner, c.module, c.id))
+			out = wireAppendMessage(out, 1, v1CommitWire(c.id, c.owner, c.module, full))
 		}
 	}
 	if binary {
