@@ -56,8 +56,11 @@ cat > "$TMP/mod/buf.yaml" <<YAML
 version: v2
 modules:
   - path: proto
-    name: $BUF_REGISTRY_ADDR/acme/$REPO
+    name: "$BUF_REGISTRY_ADDR/acme/$REPO"
 YAML
+echo "protobuf: generated buf.yaml:"
+cat "$TMP/mod/buf.yaml"
+echo "protobuf: (end of buf.yaml)"
 cat > "$TMP/mod/proto/acme/plugin/v1/plugin.proto" <<'PROTO'
 syntax = "proto3";
 
