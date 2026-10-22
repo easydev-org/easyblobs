@@ -73,7 +73,7 @@ mkdir -p "$LRCONF_DIR"
 #   Error: No results matching query were found for Lua 5.4.
 printf '%s\n' \
   "rocks_servers = { \"$HOME/rocktree/mirror\" }" \
-  'variables = { LUA_INCDIR = "/usr/include/lua5.4" }' \
+  "variables = { LUA_INCDIR = \"${LUA_INCDIR:-/usr/include/lua5.4}\" }" \
   > "$LRCONF_DIR/config-5.4.lua"
 export LUAROCKS_CONFIG="$LRCONF_DIR/config-5.4.lua"
 echo "luarocks config:"

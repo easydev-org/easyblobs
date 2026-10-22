@@ -98,10 +98,15 @@ if ! java -jar "$IVY_JAR" \
 fi
 
 # Ivy exits 0 even when it reports "not resolved" in some versions, so assert
-# the artifact it was asked for is actually on disk.
-jar=$(find /tmp/ivywork/lib -name "$PLUGIN_NAME*.jar" 2>/dev/null | head -1)
+# the artifact it was asked for is actually on disk. The retrieve pattern puts
+# it in lib/, but Ivy also keeps a cache copy, and the retrieve directory is not
+# always created when the module has no 'default' artifact mapping - so accept
+# the artifact from EITHER place (both prove the mount served the bytes).
+jar=$(find /tmp/ivywork/lib "$HOME/.ivy2" -name "$PLUGIN_NAME*.jar" 2>/dev/null | head -1)
 [ -n "$jar" ] || {
-  echo "ivy: the plugin jar was not retrieved through the mirror"; exit 1; }
+  echo "ivy: the plugin jar was not retrieved through the mirror"
+  echo "ivy: ivy2 contents:"; find "$HOME/.ivy2" -name '*.jar' 2>/dev/null | head -5
+  exit 1; }
 # And that it is a real jar, not an error page.
 java -cp "$jar" -version >/dev/null 2>&1 || \
   unzip -l "$jar" >/dev/null 2>&1 || \
