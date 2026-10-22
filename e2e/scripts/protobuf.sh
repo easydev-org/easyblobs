@@ -42,10 +42,10 @@ trap 'rm -rf "$TMP"' EXIT
 # The module's NAME carries the registry host: `buf push` resolves it from here
 # and calls <host>/buf.alpha.registry.v1alpha1.PushService/... . Naming the
 # mirror as the host is what makes the CLI talk to THIS server.
-# The registry host must include the PORT this server listens on: buf talks to
-# <host> directly over HTTPS on 443, so a host without a port can never reach a
-# service on :8080. The harness exports the real endpoint.
-BUF_REGISTRY_HOST="${BUF_REGISTRY_HOST:-bsr.easyblobs.test:8080}"
+# The registry HOST carries no port: buf dials https://<host>:443, and the TLS
+# terminator in this suite forwards 443 -> the mirror's own port. Putting :8080
+# here would make buf dial https://<host>:8080 instead and miss the terminator.
+BUF_REGISTRY_HOST="${BUF_REGISTRY_HOST:-bsr.easyblobs.test}"
 mkdir -p "$TMP/mod/proto/acme/plugin/v1"
 # buf.yaml v2 rule (straight from the CLI):
 #   "top-level name key cannot be specified if modules are specified, you must
@@ -242,7 +242,10 @@ if [ -n "${BUF_BIN:-}" ] && [ -x "${BUF_BIN}" ]; then
       # :443 is a PRIVILEGED port: binding it as an unprivileged user fails with
       #   socat[..] E bind(6, {AF=10 [...]:443}, 28): Permission denied
       # so the terminator runs under sudo when we are not already root.
-      SOCAT_CMD="socat OPENSSL-LISTEN:443,fork,reuseaddr,cert=$BUF_TLS_CERT,key=$BUF_TLS_KEY,verify=0 TCP:127.0.0.1:$PORT"
+      #
+      # -v logs the forwarded bytes, which is how a "buf says 404 but the server
+      # saw nothing" case gets distinguished from "buf never reached us".
+      SOCAT_CMD="socat -v OPENSSL-LISTEN:443,fork,reuseaddr,cert=$BUF_TLS_CERT,key=$BUF_TLS_KEY,verify=0 TCP:127.0.0.1:$PORT"
       if [ "$(id -u)" -eq 0 ]; then
         sh -c "$SOCAT_CMD" >/tmp/socat.log 2>&1 &
       else
@@ -264,6 +267,16 @@ if [ -n "${BUF_BIN:-}" ] && [ -x "${BUF_BIN}" ]; then
       done
       if [ "$up" -eq 1 ]; then
         echo "protobuf: TLS terminator is serving on :443 -> 127.0.0.1:$PORT"
+        # Prove the WHOLE path from the loopback name buf will use: DNS name ->
+        # 443 -> terminator -> mirror -> handler. If this fails, the push failure
+        # is a plumbing problem and not a protocol one.
+        glue_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+          --resolve "$BUF_REGISTRY_HOST:443:127.0.0.1" \
+          --cacert "$BUF_TLS_CERT" \
+          -X POST -H 'Content-Type: application/json' \
+          -d '{"moduleRefs":[{"value":{"name":{"owner":"probe","module":"probe"}}}]}' \
+          "https://$BUF_REGISTRY_HOST/buf.registry.module.v1.ModuleService/GetModules" 2>/dev/null || echo 000)
+        echo "protobuf: end-to-end probe through the TLS path -> HTTP $glue_code"
       else
         echo "protobuf: WARNING the TLS terminator did not come up; see /tmp/socat.log" >&2
         cat /tmp/socat.log >&2 || true
