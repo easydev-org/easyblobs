@@ -473,6 +473,13 @@ CFG
       else
         echo "protobuf: NOTE 'commit info' exited $info_rc:"
         tail -5 "$TMP/commitinfo.log"
+        # The server log says what the decoder actually made of the request, which
+        # beats guessing the message shape again.
+        if [ -f /tmp/easyblobs.log ]; then
+          echo "protobuf: server view of the GetCommits call:"
+          grep -i 'GetCommits parsed' /tmp/easyblobs.log | tail -4
+          grep -iE 'ref\[0\]' /tmp/easyblobs.log | tail -2
+        fi
       fi
     fi
   else

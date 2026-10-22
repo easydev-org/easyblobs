@@ -43,13 +43,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"time"
 
 	easyblobkit "github.com/easydev-org/easyblobs/core"
 )
+
+// debugOn mirrors the server's own switch, so protocol-level diagnostics land in
+// the same log the harness already collects.
+func debugOn() bool { return os.Getenv("EASYBLOBS_DEBUG") != "" }
 
 // v1Paths maps the service+method of a buf.registry.module.v1 call.
 func v1ServiceMethod(path string) (svc, method string, ok bool) {
@@ -625,6 +631,17 @@ func (s *State) v1GetCommits(w http.ResponseWriter, r *http.Request, body []byte
 
 	commits := make([]map[string]any, 0, len(refs))
 	var out []byte
+	// Diagnostic: with EASYBLOBS_DEBUG the server logs every request, and this
+	// line says what the decoder made of the body. "got 0" has been ambiguous
+	// twice, and guessing the request shape has cost several rounds - so record
+	// what was actually parsed.
+	if debugOn() {
+		log.Printf("protobuf: GetCommits parsed %d ref(s) from %d body byte(s); raw=%q",
+			len(refs), len(body), body)
+		for i, c := range refs {
+			log.Printf("protobuf:   ref[%d] id=%q owner=%q module=%q", i, c.id, c.owner, c.module)
+		}
+	}
 	for _, c := range refs {
 		if c.id == "" {
 			continue
