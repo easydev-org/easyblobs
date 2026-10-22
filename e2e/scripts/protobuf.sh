@@ -324,6 +324,12 @@ CFG
 
   cd "$TMP/mod"
   "$BUF_BIN" --version
+  # Print what will ACTUALLY be used for the real push. Every probe so far used
+  # its own directory; this is the one buf will read, so show it here.
+  echo "protobuf: real push will use BUF_CONFIG_DIR=$BUF_CONFIG_DIR"
+  ls -la "$BUF_CONFIG_DIR" 2>/dev/null || echo "protobuf: directory is missing"
+  cat "$BUF_CONFIG_DIR/config.yaml" 2>/dev/null || echo "protobuf: config file is missing"
+  echo "protobuf: --- end of real config ---"
   if [ -n "${EASYBLOBS_TOKEN:-}" ]; then
     export BUF_TOKEN="${EASYBLOBS_TOKEN}"
   fi
