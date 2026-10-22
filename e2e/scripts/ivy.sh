@@ -36,8 +36,13 @@ rm -rf /tmp/ivywork && mkdir -p /tmp/ivywork
 cd /tmp/ivywork
 
 # The module we resolve: a real dependency on the mirrored plugin.
+# Ivy validates both documents against an XSD, so the namespace declaration is
+# required - without it Ivy aborts with
+#   cvc-elt.1.a: Cannot find the declaration of element 'ivysettings'
 cat > ivy.xml <<XML
-<ivy-module version="2.0">
+<ivy-module version="2.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:noNamespaceSchemaLocation="https://ant.apache.org/ivy/schemas/ivy.xsd">
   <info organisation="e2e" module="ivy-e2e"/>
   <dependencies>
     <dependency org="$PLUGIN_ORG" name="$PLUGIN_NAME" rev="$PLUGIN_REV"
@@ -50,7 +55,9 @@ XML
 # The artifact pattern carries the scala_2.10/sbt_0.13 path segments that this
 # repository actually uses.
 cat > ivysettings.xml <<XML
-<ivysettings>
+<ivysettings
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:noNamespaceSchemaLocation="https://ant.apache.org/ivy/schemas/ivysettings.xsd">
   <settings defaultResolver="easyblobs"/>
   <resolvers>
     <url name="easyblobs" m2compatible="false">
@@ -65,8 +72,13 @@ echo "ivy: resolving $PLUGIN_ORG:$PLUGIN_NAME:$PLUGIN_REV through the mount"
 # NOTE: only real Ivy options here. An unrecognised flag makes Ivy print its
 # help text and exit 0 without resolving anything - which is exactly what
 # '-noillustrations' did in the previous run.
+#
+# -novalidate: Ivy otherwise fetches the XSD over the network to validate these
+# documents, and a cold/air-gapped runner makes that fail with
+#   cvc-elt.1.a: Cannot find the declaration of element 'ivysettings'
 if ! java -jar "$IVY_JAR" \
       -ivy ivysettings.xml \
+      -novalidate \
       -retrieve '/tmp/ivywork/lib/[artifact].[ext]' 2>&1 | tail -20; then
   echo "ivy: the resolver failed"
 fi
