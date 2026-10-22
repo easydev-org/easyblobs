@@ -452,8 +452,14 @@ CFG
     # the client agree about the commit: a push that reports success but stores
     # something the client cannot resolve back is not a working registry.
     set +e
+    # The reference must name a COMMIT, not just the module:
+    #   "does not have a commit specified"
+    # so the module is combined with the label/commit the push created. The push
+    # reported its commit on stdout, so resolve by that.
+    PUSHED_COMMIT=$(sed -n 's/^ *Commit: *//p' "$TMP/bufpush.log" | head -1)
+    [ -n "$PUSHED_COMMIT" ] || PUSHED_COMMIT="main"
     ( cd "$TMP/mod" && "$BUF_BIN" registry module commit info \
-        "$BUF_REGISTRY_ADDR/acme/$REPO" >"$TMP/commitinfo.log" 2>&1 )
+        "$BUF_REGISTRY_ADDR/acme/$REPO:$PUSHED_COMMIT" >"$TMP/commitinfo.log" 2>&1 )
     info_rc=$?
     set -e
     if [ "$info_rc" -eq 0 ]; then
