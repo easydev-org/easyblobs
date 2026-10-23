@@ -435,16 +435,23 @@ jobs:
           # fixture DIRECTORY is different for several of them, and
           # fixture_dir_for_protocol() maps npm->node, pypi->python, etc.
           - { protocol: npm,      tools: "node" }
-          - { protocol: pypi,     tools: "python" }
+          # pip is its own setup (pythonPackages.pip). The 'python' setup alone
+          # is a bare interpreter with no pip, so a fixture that runs
+          # `python -m build` and `twine` needs both names.
+          - { protocol: pypi,     tools: "python pip" }
           - { protocol: go,       tools: "go" }
           - { protocol: maven,    tools: "java maven" }
           - { protocol: rubygems, tools: "ruby" }
-          - { protocol: conda,    tools: "conda" }
+          # easysetup publishes micromamba for the conda protocol: one static
+          # conda-compatible binary, no base install. That is the client to drive.
+          - { protocol: conda,    tools: "micromamba" }
           - { protocol: nuget,    tools: "dotnet" }
           - { protocol: composer, tools: "php" }
           - { protocol: hex,      tools: "elixir erlang" }
           - { protocol: helm,     tools: "helm" }
-          - { protocol: cargo,    tools: "rust" }
+          # cargo is its own setup (pkgs.cargo). 'rust' is pkgs.rustc, the
+          # compiler only, so a crate cannot be built or published with it.
+          - { protocol: cargo,    tools: "rust cargo" }
     steps:
       - uses: actions/checkout@v4
 

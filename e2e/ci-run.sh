@@ -496,12 +496,7 @@ readonly_protocol() {
     #        generic target). A PUT is answered 405 by design, so the adapter has
     #        nothing to store; the suite proves a real bazel resolves a real
     #        module through the registry and builds a target.
-    # cargo: easysetup's rust setup is `pkgs.rustc` - the compiler, not cargo -
-    # so a rustc-only toolchain cannot build or publish a crate. The fixture
-    # proves what the setup DOES provide (rustc compiles and runs a program) and
-    # says so, which is the honest outcome; demanding a publish would be asking
-    # the mirror to compensate for a toolchain that was never installed.
-    swift|nix|jsr|bazel|cargo) return 0 ;;
+    swift|nix|jsr|bazel) return 0 ;;
     *) return 1 ;;
   esac
 }
