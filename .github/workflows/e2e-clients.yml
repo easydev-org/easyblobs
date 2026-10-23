@@ -487,9 +487,28 @@ jobs:
           echo "build prerequisites present"
 
       - name: prove the toolchain is the easysetup one
+        shell: bash
         run: |
           set -eu
           . /opt/setup/env.sh
+          # easysetup appends "/opt/setup/*/bin" to $GITHUB_PATH and to PATH, but
+          # not every toolchain keeps its binary in bin/. dotnet ships the
+          # executable at the ROOT of its directory (<id>/dotnet), so the
+          # appended bin/ is empty and the tool looks uninstalled:
+          #     ./publish.sh: 7: dotnet: not found
+          # Add every "root that has an executable directly in it" as well. This
+          # is a workaround for a gap in easysetup, not a property of dotnet.
+          for d in /opt/setup/*/; do
+            [ -d "$d" ] || continue
+            [ -f "$d/.easysetup" ] || continue
+            case ":${PATH}:" in *":${d%/}:"*) continue ;; esac
+            # only add it if the directory itself holds executables
+            if [ -n "$(find "$d" -maxdepth 1 -type f -perm -u+x 2>/dev/null | head -1)" ]; then
+              export PATH="${d%/}:$PATH"
+              echo "$d" >> "$GITHUB_PATH"
+              echo "added ${d%/} to PATH (toolchain keeps its binary at the root)"
+            fi
+          done
           echo "matrix.tools = ${{ matrix.tools }}"
           for d in /opt/setup/*/; do
             [ -d "$d" ] || continue
@@ -498,7 +517,7 @@ jobs:
           done
           # Print the versions the tools report, so a silently-wrong toolchain is
           # visible in the log rather than only in a later failure.
-          for c in node python3 go java mvn ruby; do
+          for c in node python3 go java mvn ruby dotnet composer mix conda helm cargo; do
             # The `|| true` matters: this job asks easysetup for ONE toolchain, so
             # most of these names do not exist, and under `set -e` the last
             # `command -v` returning 1 killed the step with exit 127. That is a
@@ -556,11 +575,26 @@ jobs:
       # The payload: the toolchain easysetup installed builds the real project,
       # publishes through the mount and reads it back.
       - name: build and publish with the easysetup toolchain
+        # env.sh is BASH: it defines functions and uses `local`. The default
+        # shell here is `sh -e`, where sourcing it dies quietly and leaves the
+        # toolchain off PATH - which surfaces as "dotnet: not found" from inside
+        # the fixture and looks like easysetup failing to install.
+        shell: bash
         run: |
           set -eu
           # env.sh is what puts the toolchain on PATH; sourcing it here is the
           # difference between "easysetup installed node" and "node runs".
           . /opt/setup/env.sh
+          # Same root-level-binary gap as above: $GITHUB_PATH only affects LATER
+          # steps, so this step needs the path itself.
+          for d in /opt/setup/*/; do
+            [ -d "$d" ] || continue
+            [ -f "$d/.easysetup" ] || continue
+            if [ -n "$(find "$d" -maxdepth 1 -type f -perm -u+x 2>/dev/null | head -1)" ]; then
+              export PATH="${d%/}:$PATH"
+            fi
+          done
+          echo "PATH=$PATH"
           sh -x e2e/ci-run.sh "${{ matrix.protocol }}"
 
       - name: upload the server log on failure
