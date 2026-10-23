@@ -30,6 +30,22 @@ PROTO="${1:?usage: ci-run.sh <protocol>}"
 : "${EASYBLOBS_ORIGIN:?EASYBLOBS_ORIGIN not set}"
 : "${EASYBLOBS_DATA:=/tmp/eb-data}"
 
+# WHICH PROMISE this run is checking.
+#
+#   pull    the mount serves an UPSTREAM package to a real client and caches it
+#   hosted  a real client PUBLISHES its own artefact and reads it back
+#
+# One direction per job. They fail for unrelated reasons - pull depends on
+# github.com / registry.npmjs.org / pypi.org, hosted depends on nothing outside
+# this machine - and a single job cannot report both honestly: whichever runs
+# first and fails hides the other's result.
+DIRECTION="${E2E_DIRECTION:-pull}"
+case "$DIRECTION" in
+  pull|hosted) ;;
+  *) echo "E2E_DIRECTION must be 'pull' or 'hosted', got '$DIRECTION'" >&2; exit 2 ;;
+esac
+export DIRECTION
+
 # NO PROXIES. The CI environment must run with exactly the network it has; the
 # harness does not inject, wrap or restrict egress. Every *_proxy variable is
 # cleared so a client never inherits one from the runner image, and nothing here
@@ -407,59 +423,110 @@ mkdir -p "$E2E_W"
 
 cd "$WORK"
 
-echo "=== e2e/$PROTO (base=$EASYBLOBS_BASE, CAS before: $before files) ==="
-# A per-protocol override (prep_client) wins over the suite's own script when
-# the stock image already ships what the script installs.
+echo "=== e2e/$PROTO direction=$DIRECTION (base=$EASYBLOBS_BASE, CAS before: $before files) ==="
 
-# A FIXTURE wins over the hand-written suite: it is a real project, so it proves
-# the toolchain as well as the protocol.
-if FIXTURE_DIR=$(fixture_for "$PROTO"); then
-  echo "(running the easyblobs-test fixture from $FIXTURE_DIR)"
+# A protocol makes TWO promises, and they fail for different reasons:
+#
+#   pull    a client asks for an upstream package and the mount serves it while
+#           caching it. Without this a mirror is merely a proxy, and "did the
+#           CAS/data dir grow?" is what separates the two.
+#   hosted  a client publishes its OWN artefact and reads it back.
+#
+# They run as SEPARATE jobs (one direction each), not as two steps in one job:
+#   * pull depends on github.com, registry.npmjs.org, pypi.org, ... A flaky
+#     upstream must not redden the hosted result, which is entirely local.
+#   * if pull exits non-zero inside a shared job, hosted never runs at all and
+#     its result is lost - the failure hides half the information.
+#   * a single before/after pair cannot tell them apart either: a hosted publish
+#     always grows the store, so "the CAS grew" would answer YES even when the
+#     pull step never reached upstream.
+#
+# A per-protocol override (prep_client) replaces the pull step's SHELL when the
+# stock image already ships what the suite installs; it never replaces the
+# fixture.
+
+run_pull_suite() {
+  if prep_client; then
+    echo "(used the per-protocol client override)"
+    return 0
+  fi
+  if [ ! -f "$REPO/e2e/scripts/$PROTO.sh" ]; then
+    echo "no e2e/scripts/$PROTO.sh: this protocol has no pull-through suite" >&2
+    return 2
+  fi
+  # Capture the suite's output AND its xtrace to one file. Redirecting inside
+  # an `elif !` condition loses stderr in some shells, which is exactly how
+  # hex/jsrnpm looked like "nothing happened" and cost several CI rounds.
+  POUT=/tmp/e2e-$PROTO.pull.log
+  if sh -x "$REPO/e2e/scripts/$PROTO.sh" >"$POUT" 2>&1; then
+    cat "$POUT"
+    return 0
+  fi
+  echo "--- FAILED: e2e/$PROTO pull-through (last 60 lines, incl. xtrace) ---" >&2
+  tail -60 "$POUT" >&2
+  # The suites use `wget -qO`, which prints NOTHING on failure. Re-run just
+  # the base URL verbosely so a 404/refused/timeout becomes visible.
+  echo "--- probing the mount directly ---" >&2
+  if command -v wget >/dev/null; then
+    wget -S -O /dev/null --timeout=15 "$EASYBLOBS_BASE/" 2>&1 | head -20 >&2 || true
+  fi
+  if command -v curl >/dev/null; then
+    curl -sS -o /dev/null -w 'curl: %{http_code} in %{time_total}s\n' --max-time 15 "$EASYBLOBS_BASE/" >&2 || true
+  fi
+  echo "--- easyblobs log (tail) ---" >&2
+  tail -30 /tmp/easyblobs.log >&2 || true
+  echo "--- preconditions ---" >&2
+  echo "  base=$EASYBLOBS_BASE" >&2
+  for t in wget curl tar sh bash; do
+    p=$(command -v "$t" 2>/dev/null || echo MISSING)
+    echo "  $t: $p" >&2
+  done
+  return 1
+}
+
+run_hosted_fixture() { # run_hosted_fixture <dir>
+  echo "(running the easyblobs-test fixture from $1)"
   # Work in a COPY: the publish scripts create build outputs (node_modules,
   # target/, dist/) and must not mutate the shared checkout.
   FIX_WORK="$WORK/fixture"
   mkdir -p "$FIX_WORK"
-  cp -a "$FIXTURE_DIR/." "$FIX_WORK/"
-  OUT=/tmp/e2e-$PROTO.log
-  if ( cd "$FIX_WORK" && sh -x ./publish.sh ) >"$OUT" 2>&1; then
-    cat "$OUT"
-  else
-    echo "--- FAILED: fixture for $PROTO (last 60 lines, incl. xtrace) ---" >&2
-    tail -60 "$OUT" >&2
-    exit 1
+  cp -a "$1/." "$FIX_WORK/"
+  FOUT=/tmp/e2e-$PROTO.hosted.log
+  if ( cd "$FIX_WORK" && sh -x ./publish.sh ) >"$FOUT" 2>&1; then
+    cat "$FOUT"
+    return 0
   fi
-elif prep_client; then
-  echo "(used the per-protocol client override)"
-else
-  # Capture the suite's output AND its xtrace to one file. Redirecting inside
-  # an `elif !` condition loses stderr in some shells, which is exactly how
-  # hex/jsrnpm looked like "nothing happened" and cost several CI rounds.
-  OUT=/tmp/e2e-$PROTO.log
-  if sh -x "$REPO/e2e/scripts/$PROTO.sh" >"$OUT" 2>&1; then
-    cat "$OUT"
-  else
-    echo "--- FAILED: e2e/$PROTO (last 60 lines, incl. xtrace) ---" >&2
-    tail -60 "$OUT" >&2
-    # The suites use `wget -qO`, which prints NOTHING on failure. Re-run just
-    # the base URL verbosely so a 404/refused/timeout becomes visible.
-    echo "--- probing the mount directly ---" >&2
-    if command -v wget >/dev/null; then
-      wget -S -O /dev/null --timeout=15 "$EASYBLOBS_BASE/" 2>&1 | head -20 >&2 || true
+  echo "--- FAILED: fixture for $PROTO (last 60 lines, incl. xtrace) ---" >&2
+  tail -60 "$FOUT" >&2
+  return 1
+}
+
+FIXTURE_DIR=""
+FIXTURE_DIR=$(fixture_for "$PROTO" 2>/dev/null) || FIXTURE_DIR=""
+
+case "$DIRECTION" in
+  pull)
+    rc=0
+    run_pull_suite || rc=$?
+    if [ "$rc" = 2 ]; then
+      echo "SKIP: $PROTO has no pull-through suite; nothing to verify upstream" >&2
+      exit 0
     fi
-    if command -v curl >/dev/null; then
-      curl -sS -o /dev/null -w 'curl: %{http_code} in %{time_total}s\n' --max-time 15 "$EASYBLOBS_BASE/" >&2 || true
+    [ "$rc" = 0 ] || exit 1
+    ;;
+  hosted)
+    if [ -z "$FIXTURE_DIR" ]; then
+      echo "::error::$PROTO has no hosted fixture; either add one to" >&2
+      echo "::error::easydev-org/easyblobs-test or drop it from the hosted matrix" >&2
+      exit 1
     fi
-    echo "--- easyblobs log (tail) ---" >&2
-    tail -30 /tmp/easyblobs.log >&2 || true
-    echo "--- preconditions ---" >&2
-    echo "  base=$EASYBLOBS_BASE" >&2
-    for t in wget curl tar sh bash; do
-      p=$(command -v "$t" 2>/dev/null || echo MISSING)
-      echo "  $t: $p" >&2
-    done
-    exit 1
-  fi
-fi
+    run_hosted_fixture "$FIXTURE_DIR" || exit 1
+    ;;
+  *)
+    echo "E2E_DIRECTION must be 'pull' or 'hosted', got '$DIRECTION'" >&2
+    exit 2
+    ;;
+esac
 
 after=$(cas_count)
 after_bytes=$(data_bytes)

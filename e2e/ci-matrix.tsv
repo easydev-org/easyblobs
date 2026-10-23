@@ -20,47 +20,47 @@
 
 # --- application-level clients: installed with actions on ubuntu-latest ---
 
-npm	ubuntu-latest	npm via actions/setup-node
-jsrnpm	ubuntu-latest	npm via actions/setup-node (JSR's npm-compatible packument)
-jsr	ubuntu-latest	deno via denoland/setup-deno
-pypi	ubuntu-latest	pip via actions/setup-python
-huggingface	ubuntu-latest	pip + huggingface_hub (installed by the suite)
-conan	ubuntu-latest	conan via pip (installed in the job)
-cargo	ubuntu-latest	cargo via dtolnay/rust-toolchain
-go	ubuntu-latest	go via actions/setup-go
-maven	ubuntu-latest	mvn via actions/setup-java
-gradle	ubuntu-latest	mvn via actions/setup-java
-google	ubuntu-latest	mvn via actions/setup-java
-clojars	ubuntu-latest	mvn via actions/setup-java
-spring	ubuntu-latest	mvn via actions/setup-java
-jitpack	ubuntu-latest	mvn via actions/setup-java
-ivy	ubuntu-latest	Apache Ivy (jar fetched in the job) on actions/setup-java
-bazel	ubuntu-latest	bazel via bazel-contrib/setup-bazel
-helm	ubuntu-latest	helm via azure/setup-helm
-rubygems	ubuntu-latest	gem via ruby/setup-ruby
-composer	ubuntu-latest	composer + php via ramsey/composer-install / setup-php
-hex	ubuntu-latest	mix via erlef/setup-beam
-pub	ubuntu-latest	dart via dart-lang/setup-dart
-juliapkg	ubuntu-latest	julia via julia-actions/setup-julia
-hackage	ubuntu-latest	cabal via haskell-actions/setup
-stackage	ubuntu-latest	cabal via haskell-actions/setup
-opam	ubuntu-latest	opam via ocaml/setup-ocaml
-pecl	ubuntu-latest	pecl via shivammathur/setup-php
-cpan	ubuntu-latest	cpanm via shogo82148/actions-setup-perl
-nix	ubuntu-latest	nix via cachix/install-nix-action
-luarocks	ubuntu-latest	luarocks via leafo/gh-actions-luarocks
-nuget	ubuntu-latest	dotnet via actions/setup-dotnet
-conda	ubuntu-latest	conda via conda-incubator/setup-miniconda
-protobuf	ubuntu-latest	buf via bufbuild/buf-setup-action
-cran	ubuntu-latest	R via r-lib/actions/setup-r
-swift	ubuntu-latest	swiftc via swift-actions/setup-swift
-jenkins	ubuntu-latest	jenkins-plugin-cli (jar fetched in the job) + setup-java
+npm	ubuntu-latest	hosted	npm via actions/setup-node
+jsrnpm	ubuntu-latest	pull-only	npm via actions/setup-node (JSR's npm-compatible packument)
+jsr	ubuntu-latest	pull-only	deno via denoland/setup-deno
+pypi	ubuntu-latest	hosted	pip via actions/setup-python
+huggingface	ubuntu-latest	pull-only	pip + huggingface_hub (installed by the suite)
+conan	ubuntu-latest	pull-only	conan via pip (installed in the job)
+cargo	ubuntu-latest	hosted	cargo via dtolnay/rust-toolchain
+go	ubuntu-latest	hosted	go via actions/setup-go
+maven	ubuntu-latest	hosted	mvn via actions/setup-java
+gradle	ubuntu-latest	hosted	mvn via actions/setup-java
+google	ubuntu-latest	hosted	mvn via actions/setup-java
+clojars	ubuntu-latest	hosted	mvn via actions/setup-java
+spring	ubuntu-latest	hosted	mvn via actions/setup-java
+jitpack	ubuntu-latest	hosted	mvn via actions/setup-java
+ivy	ubuntu-latest	hosted	Apache Ivy (jar fetched in the job) on actions/setup-java
+bazel	ubuntu-latest	pull-only	bazel via bazel-contrib/setup-bazel
+helm	ubuntu-latest	hosted	helm via azure/setup-helm
+rubygems	ubuntu-latest	hosted	gem via ruby/setup-ruby
+composer	ubuntu-latest	hosted	composer + php via ramsey/composer-install / setup-php
+hex	ubuntu-latest	hosted	mix via erlef/setup-beam
+pub	ubuntu-latest	pull-only	dart via dart-lang/setup-dart
+juliapkg	ubuntu-latest	pull-only	julia via julia-actions/setup-julia
+hackage	ubuntu-latest	pull-only	cabal via haskell-actions/setup
+stackage	ubuntu-latest	pull-only	cabal via haskell-actions/setup
+opam	ubuntu-latest	pull-only	opam via ocaml/setup-ocaml
+pecl	ubuntu-latest	pull-only	pecl via shivammathur/setup-php
+cpan	ubuntu-latest	pull-only	cpanm via shogo82148/actions-setup-perl
+nix	ubuntu-latest	pull-only	nix via cachix/install-nix-action
+luarocks	ubuntu-latest	pull-only	luarocks via leafo/gh-actions-luarocks
+nuget	ubuntu-latest	hosted	dotnet via actions/setup-dotnet
+conda	ubuntu-latest	hosted	conda via conda-incubator/setup-miniconda
+protobuf	ubuntu-latest	hosted	buf via bufbuild/buf-setup-action
+cran	ubuntu-latest	pull-only	R via r-lib/actions/setup-r
+swift	ubuntu-latest	pull-only	swiftc via swift-actions/setup-swift
+jenkins	ubuntu-latest	pull-only	jenkins-plugin-cli (jar fetched in the job) + setup-java
 
 # --- distro package managers: these NEED their own userland ---
-apk	container:alpine:3.20	apk(8) exists only on Alpine
-debian	container:debian:bookworm	apt tests THIS distro's archive layout
-rpm	container:fedora:41	dnf tests THIS distro's repomd metadata
+apk	container:alpine:3.20	pull-only	apk(8) exists only on Alpine
+debian	container:debian:bookworm	pull-only	apt tests THIS distro's archive layout
+rpm	container:fedora:41	pull-only	dnf tests THIS distro's repomd metadata
 
 # --- protocols whose client is plain HTTP by nature ---
-netcache	ubuntu-latest	curl IS the client (raw HTTP cache semantics)
-oci	ubuntu-latest	wget speaks the OCI /v2 protocol (no docker daemon needed)
+netcache	ubuntu-latest	pull-only	curl IS the client (raw HTTP cache semantics)
+oci	ubuntu-latest	pull-only	wget speaks the OCI /v2 protocol (no docker daemon needed)

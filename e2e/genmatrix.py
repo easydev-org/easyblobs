@@ -41,6 +41,15 @@ def rows():
         if len(parts) < 2:
             raise SystemExit(f"genmatrix: malformed row (need protocol<TAB>runner): {raw!r}")
         proto, runner = parts[0].strip(), parts[1].strip()
+        # Third column: does this protocol have a HOSTED fixture? A protocol
+        # makes two promises and they are tested as separate jobs, so the set
+        # has to be stated in the source of truth rather than guessed.
+        hosted = parts[2].strip() if len(parts) > 2 else "pull-only"
+        if hosted not in ("hosted", "pull-only"):
+            raise SystemExit(
+                f"genmatrix: third column must be 'hosted' or 'pull-only', "
+                f"got {hosted!r} for {proto!r}"
+            )
         if not proto or not runner:
             raise SystemExit(f"genmatrix: empty protocol or runner: {raw!r}")
         if proto in seen:
@@ -48,7 +57,7 @@ def rows():
         seen.add(proto)
         if only and proto not in only:
             continue
-        yield proto, runner
+        yield proto, runner, hosted
     if only:
         unknown = only - seen
         if unknown:
@@ -58,7 +67,8 @@ def rows():
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "--app"
     app, distro = [], []
-    for proto, runner in rows():
+    hosted = []
+    for proto, runner, direction in rows():
         if runner.startswith("container:"):
             image = runner.split(":", 1)[1].strip()
             if not image:
@@ -66,6 +76,11 @@ def main():
             distro.append({"protocol": proto, "image": image})
         elif runner == "ubuntu-latest":
             app.append(proto)
+            # The hosted matrix is the subset that has a fixture to publish with.
+            # A protocol in "app" without one still gets a pull job - it just has
+            # no hosted job, because there is nothing to publish.
+            if direction == "hosted":
+                hosted.append(proto)
         else:
             raise SystemExit(
                 f"genmatrix: unknown runner {runner!r} for {proto!r} "
@@ -74,13 +89,15 @@ def main():
 
     if mode == "--app":
         print(json.dumps({"protocol": app}))
+    elif mode == "--hosted":
+        print(json.dumps({"protocol": hosted}))
     elif mode == "--distro":
         print(json.dumps({"include": distro}))
     else:
-        raise SystemExit(f"usage: genmatrix.py --app|--distro (got {mode!r})")
+        raise SystemExit(f"usage: genmatrix.py --app|--hosted|--distro (got {mode!r})")
 
-    print(f"genmatrix: {len(app)} app protocol(s), {len(distro)} distro protocol(s)",
-          file=sys.stderr)
+    print(f"genmatrix: {len(app)} pull protocol(s), {len(hosted)} hosted, "
+          f"{len(distro)} distro", file=sys.stderr)
     return 0
 
 
