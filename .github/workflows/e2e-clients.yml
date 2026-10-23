@@ -493,6 +493,9 @@ jobs:
           apt-get install -y -qq --no-install-recommends libicu76 2>/dev/null || \
             apt-get install -y -qq --no-install-recommends libicu72 2>/dev/null || \
             echo "NOTE: no libicu7x package found; dotnet will need invariant globalization"
+          # php links libxml2; the same cache-hit-skips-apt_deps problem as ICU:
+          #   php: error while loading shared libraries: libxml2.so.2
+          apt-get install -y -qq --no-install-recommends libxml2 libcurl4 2>/dev/null || true
           echo "build prerequisites present"
 
       - name: prove the toolchain is the easysetup one
