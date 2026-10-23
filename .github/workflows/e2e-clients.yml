@@ -483,7 +483,16 @@ jobs:
           # harmless duplicate instead of a mystery.
           apt-get install -y -qq --no-install-recommends \
             libyaml-0-2 libssl3 zlib1g libffi8 libgmp10 libreadline8 \
-            libbz2-1.0 liblzma5 libsqlite3-0 libatomic1
+            libbz2-1.0 liblzma5 libsqlite3-0 libatomic1 \
+            libicu-dev
+          # libicu needs its soname package, not just the -dev one, and dotnet
+          # fails hard without it:
+          #   Couldn't find a valid ICU package installed on the system.
+          # easysetup lists libicu76 in dotnet's apt_deps, but a CACHE HIT skips
+          # install.sh entirely, so the deps are never installed on a rerun.
+          apt-get install -y -qq --no-install-recommends libicu76 2>/dev/null || \
+            apt-get install -y -qq --no-install-recommends libicu72 2>/dev/null || \
+            echo "NOTE: no libicu7x package found; dotnet will need invariant globalization"
           echo "build prerequisites present"
 
       - name: prove the toolchain is the easysetup one
