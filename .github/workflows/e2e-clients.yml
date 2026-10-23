@@ -424,6 +424,31 @@ jobs:
             tools: "java-21 maven-3.10"
           - protocol: rubygems
             tools: "ruby-3.4"
+          # ---- second wave -------------------------------------------------
+          # Only protocols whose adapter has a WRITE path are here: a fixture
+          # that builds a package and then finds nowhere to publish it proves
+          # nothing about the registry. Checked in the adapter source:
+          #   conda  PUT  _hosted/<repo>/<native path>
+          #   nuget  PUT  /v3/package          (the flat container is read-only)
+          #   composer PUT api/packages
+          #   hex    POST /publish?name&version
+          #   helm   POST api/charts
+          # Read-only mirrors (cran, juliapkg, pecl, luarocks, bazel, nix) stay
+          # on their hand-written suites.
+          - protocol: conda
+            tools: "conda-26"
+          - protocol: nuget
+            tools: "dotnet-10"
+          - protocol: composer
+            # composer is a PHP tool; the fixture runs `composer install` and
+            # `php main.php`, so both tools come from easysetup.
+            tools: "php-8.5"
+          - protocol: hex
+            tools: "elixir-1.20 erlang-29"
+          - protocol: helm
+            tools: "helm-4"
+          - protocol: cargo
+            tools: "rust-1.99"
     steps:
       - uses: actions/checkout@v4
 

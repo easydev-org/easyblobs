@@ -328,6 +328,14 @@ func (s *State) publish(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = r.URL.Query().Get("name")
 	}
+	// The version takes the same path as the name. It used to be read ONLY from
+	// the body's cargo framing or a JSON key, so a caller that supplied
+	// "?name=...&version=1.0.0" got its name honoured and its version silently
+	// replaced by the 0.1.0 default below - publishing 1.0.0 and then finding
+	// 0.1.0 stored, which reads as "the registry lost my upload".
+	if version == "" {
+		version = r.URL.Query().Get("version")
+	}
 	if name == "" {
 		name = jsonStr(data, "name")
 		version = jsonStr(data, "version")

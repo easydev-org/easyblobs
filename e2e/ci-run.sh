@@ -379,6 +379,10 @@ fixture_dir_for_protocol() {
     # npm adapter only strips an "/artifacts/npm" prefix, so a mount named
     # "/artifacts/node" misses the strip and every publish 404s.
     npm)       echo node ;;
+    composer)  echo php ;;
+    hex)       echo elixir ;;
+    cargo)     echo rust ;;
+    helm)      echo helm ;;
     *)         echo "$1" ;;
   esac
 }
