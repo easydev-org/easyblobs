@@ -711,6 +711,62 @@ jobs:
   # interpreter linked against trixie's glibc 2.41, and ubuntu-latest (2.39)
   # cannot load them. The action checks this up front and says so.
   # ---------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
+  # PROBE: does the container really have to be trixie?
+  #
+  # The easysetup action insists on `container: debian:trixie-slim` and exits 1
+  # otherwise, on the grounds that the artifacts need trixie's glibc 2.41. But a
+  # setup is a nix CLOSURE, and closures.json shows every one of them depends on
+  # `base-2.44`, which IS glibc 2.44 plus its loader. If the closure carries its
+  # own libc, the host's does not matter and the requirement is superstition.
+  #
+  # This job answers that by bypassing the action: install.sh is what actually
+  # unpacks, and it has no platform check. Then it runs the binaries on
+  # ubuntu-latest (glibc 2.39), which the action would have refused.
+  #
+  # Temporary: it exists to decide whether the other jobs need the container.
+  # ---------------------------------------------------------------------------
+  probe-no-container:
+    runs-on: ubuntu-latest
+    steps:
+      - name: what is this runner
+        run: |
+          set -eu
+          . /etc/os-release
+          echo "distro: ${ID} ${VERSION_ID}"
+          ldd --version | head -1
+
+      - name: install the installer's prerequisites
+        run: |
+          set -eu
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            curl zstd python3 ca-certificates
+
+      - name: install a toolchain WITHOUT the action and WITHOUT a container
+        run: |
+          set -eu
+          curl -fsSL --retry 3 \
+            https://raw.githubusercontent.com/easydev-org/easysetup/main/install.sh \
+            -o /tmp/es-install.sh
+          sudo NEED_ROOT=1 bash /tmp/es-install.sh node python
+
+      - name: run the binaries that were just installed
+        run: |
+          set -eu
+          echo "--- setup registry ---"
+          for f in /nix/setup-root-*; do
+            [ -f "$f" ] || continue
+            echo "  $(basename "$f"): $(cat "$f")"
+          done
+          echo "--- which libc does the node binary use? ---"
+          NODE=$(ls -d /nix/store/*-nodejs-*/bin 2>/dev/null | head -1)/node
+          echo "  $NODE"
+          ldd "$NODE" | head -5
+          echo "--- it either runs or it does not ---"
+          "$NODE" --version
+          echo "NODE RAN"
+
   verify-easysetup:
     needs: [server]
     runs-on: ubuntu-latest
