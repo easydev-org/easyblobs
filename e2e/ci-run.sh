@@ -593,16 +593,25 @@ after_bytes=$(data_bytes)
 #
 readonly_protocol() {
   case "$1" in
-    # nix stays here: `nix store info --store <mount>` is a metadata query and
-    # `nix-instantiate --eval` is pure evaluation, so no narinfo/nar is fetched
-    # and nothing can be cached. The proof is that every nix command succeeds.
+    # This list is about the PULL direction only: these suites fetch nothing
+    # that would land in the store, so "the CAS grew" is the wrong question
+    # for them. It says nothing about whether the protocol can be published to.
     #
-    # swift, jsr and bazel are NOT here any more. All three were listed because
-    # their fixtures could not publish, so nothing was stored and the assertion
-    # failed for the right reason on the wrong thing. They publish under their
-    # adapter's own write path now (swiftpm; httpcache's _hosted prefix), so the
-    # cache assertion applies to them like any other protocol.
-    nix) return 0 ;;
+    #   nix    `nix store info --store <mount>` is a metadata query and
+    #          `nix-instantiate --eval` is pure evaluation; no narinfo/nar is
+    #          fetched.
+    #   jsr    deno resolves the module into ITS OWN store, so the mount's data
+    #          dir does not grow even though the client really did fetch.
+    #   swift  identifiers/releases are metadata lookups; the client then
+    #          compiles against the parsed answer.
+    #   bazel  `bazel mod graph` resolves module metadata. (bazel does cache
+    #          source archives in some paths, but not in this suite's flow.)
+    #
+    # I removed swift/jsr/bazel from this list once, reasoning that they can
+    # publish now so the assertion should apply. That conflated two directions:
+    # HOSTED is where they store, PULL is where they do not. The push direction
+    # has its own job and its own assertions.
+    nix|jsr|swift|bazel) return 0 ;;
     *) return 1 ;;
   esac
 }
