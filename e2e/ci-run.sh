@@ -591,25 +591,18 @@ after_bytes=$(data_bytes)
 # adapter legitimately has nothing to store for those calls. Failing them for
 # "the CAS did not grow" would be testing the wrong thing.
 #
-#   swift  identifiers/releases are metadata lookups; the client then compiles
-#          and runs a Swift program against the parsed answer. Nothing is
-#          downloaded, so nothing is cached.
 readonly_protocol() {
   case "$1" in
-    # swift: identifiers/releases are metadata lookups; the client then compiles
-    #        and runs a Swift program against the parsed answer.
-    # nix:   `nix store info --store <mount>` reports on a binary-cache store -
-    #        a metadata query. `nix-instantiate --eval` is pure evaluation. No
-    #        narinfo/nar is downloaded, so nothing is cached, and the suite's
-    #        proof is that every nix command succeeds.
-    # jsr: deno caches the resolved module in ITS OWN store; the adapter answers
-    #      meta.json / version meta / module from upstream and stores nothing,
-    #      so the mount's data dir does not grow.
-    # bazel: a read-only mirror of the Bazel Central Registry (served through the
-    #        generic target). A PUT is answered 405 by design, so the adapter has
-    #        nothing to store; the suite proves a real bazel resolves a real
-    #        module through the registry and builds a target.
-    swift|nix|jsr|bazel) return 0 ;;
+    # nix stays here: `nix store info --store <mount>` is a metadata query and
+    # `nix-instantiate --eval` is pure evaluation, so no narinfo/nar is fetched
+    # and nothing can be cached. The proof is that every nix command succeeds.
+    #
+    # swift, jsr and bazel are NOT here any more. All three were listed because
+    # their fixtures could not publish, so nothing was stored and the assertion
+    # failed for the right reason on the wrong thing. They publish under their
+    # adapter's own write path now (swiftpm; httpcache's _hosted prefix), so the
+    # cache assertion applies to them like any other protocol.
+    nix) return 0 ;;
     *) return 1 ;;
   esac
 }

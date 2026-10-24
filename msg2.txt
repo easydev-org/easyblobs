@@ -1,0 +1,26 @@
+test(e2e): promote the read-only mirrors to hosted
+
+Kind:Mirror does not mean "cannot be written to". Kind decides how a target's
+host participates in content identity, and whether several upstreams share one
+row and one blob. Whether an adapter accepts writes is a property of the
+adapter, not of the target.
+
+httpcache/lib.go has carried a Hosted handler all along:
+
+    if repo, sub, hosted := HostedRequest(r, ...); hosted {
+        s.serveHosted(w, r, repo, sub)   // PUT / GET / DELETE
+    }
+    // every other path: read-only pull-through cache
+
+So cran, cpan, juliapkg, jsr and bazel accept uploads under the reserved
+"_hosted/<repo>/" prefix. A bare PUT is 405 because it addresses the CACHE, not
+because the protocol is unwritable.
+
+Promoted: cran cpan juliapkg jsr bazel swift -> 24 hosted, 0 build-only.
+
+swift needed a second correction: it has its own swiftpm adapter with
+PUT/POST/DELETE and was in readonly_protocol() only because its fixture could
+not publish at the time. jsr and bazel were there for the same reason. All three
+are removed, so the cache assertion applies to them like any other protocol.
+
+The build-only direction stays: unused today, but nix is genuinely read-only.
