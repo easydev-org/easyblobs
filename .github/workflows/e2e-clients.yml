@@ -672,122 +672,9 @@ jobs:
           name: easyblobs-log-hosted-${{ matrix.protocol }}
           path: /tmp/easyblobs.log
           if-no-files-found: ignore
-
-
-  # ---------------------------------------------------------------------------
-  # STEP ONE of moving the toolchains onto easysetup.
-  #
-  # easysetup publishes pinned, prebuilt toolchains, so a job can ask for
-  # "node-26 python-3.13" and get exactly those versions instead of relying on
-  # whatever a setup-* action resolves that day. Its artifacts are built for
-  # debian 13 (trixie, glibc 2.41) - and that is a HARD constraint: on an older
-  # glibc every binary dies at the loader. The `clients` job runs on
-  # ubuntu-latest (glibc 2.39), which is exactly why this is a SEPARATE job in a
-  # trixie container rather than a switch flipped for all 42 protocols.
-  #
-  # The point of this job is to prove the whole chain end to end before anything
-  # migrates:
-  #     easysetup installs a toolchain -> THAT toolchain builds a real project
-  #     from easyblobs-test -> it publishes through the mount -> reads it back.
-  # It is deliberately small and does not gate the other jobs.
-  # ---------------------------------------------------------------------------
-  # ---------------------------------------------------------------------------
-  # The toolchains come from easydev-org/easysetup, and from nothing else.
-  #
-  # easysetup now publishes nix CLOSURES: each setup unpacks into /nix/store and
-  # carries its own libraries, so there is no apt step, no dependency resolution
-  # and no per-tool repair. That removes every workaround this job used to need -
-  # the libyaml/libicu/libxml2 installs, and the "binary lives at the root, not
-  # in bin/" path fix - because those existed only because upstream binaries were
-  # being hand-packaged.
-  #
-  # Usage, from easysetup's own examples/ci.yml:
-  #   * the action puts the tool directories on $GITHUB_PATH, so a later
-  #     `run:` step finds `node`/`python3`/`go` with no sourcing;
-  #   * $EASYSETUP_ENV is exported for anything that needs more than PATH;
-  #   * several `uses:` steps accumulate rather than replace.
-  #
-  # The container is not optional: the artifacts carry an absolute /nix/store
-  # interpreter linked against trixie's glibc 2.41, and ubuntu-latest (2.39)
-  # cannot load them. The action checks this up front and says so.
-  # ---------------------------------------------------------------------------
-  # ---------------------------------------------------------------------------
-  # PROBE: does the container really have to be trixie?
-  #
-  # The easysetup action insists on `container: debian:trixie-slim` and exits 1
-  # otherwise, on the grounds that the artifacts need trixie's glibc 2.41. But a
-  # setup is a nix CLOSURE, and closures.json shows every one of them depends on
-  # `base-2.44`, which IS glibc 2.44 plus its loader. If the closure carries its
-  # own libc, the host's does not matter and the requirement is superstition.
-  #
-  # This job answers that by bypassing the action: install.sh is what actually
-  # unpacks, and it has no platform check. Then it runs the binaries on
-  # ubuntu-latest (glibc 2.39), which the action would have refused.
-  #
-  # Temporary: it exists to decide whether the other jobs need the container.
-  # ---------------------------------------------------------------------------
-  probe-no-container:
-    runs-on: ubuntu-latest
-    steps:
-      - name: what is this runner
-        run: |
-          set -eu
-          . /etc/os-release
-          echo "distro: ${ID} ${VERSION_ID}"
-          ldd --version | head -1
-
-      - name: install the installer's prerequisites
-        run: |
-          set -eu
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends \
-            curl zstd python3 ca-certificates
-
-      - name: install a toolchain WITHOUT the action and WITHOUT a container
-        run: |
-          set -eu
-          curl -fsSL --retry 3 \
-            https://raw.githubusercontent.com/easydev-org/easysetup/main/install.sh \
-            -o /tmp/es-install.sh
-          sudo NEED_ROOT=1 bash /tmp/es-install.sh node python
-
-      - name: run the binaries that were just installed
-        run: |
-          set -eu
-          echo "--- setup registry ---"
-          for f in /nix/setup-root-*; do
-            [ -f "$f" ] || continue
-            echo "  $(basename "$f"): $(cat "$f")"
-          done
-          echo "--- which libc does the node binary use? ---"
-          # Take the path from the REGISTRY, not from a glob. The first attempt
-          # globbed /nix/store/*-nodejs-*/bin and picked up
-          # ...-nodejs-slim-...-npm/bin, which has no `node` in it - a bug in the
-          # probe, not a verdict on the binaries.
-          STORE=$(cut -d'|' -f1 /nix/setup-root-node-26.12.0)
-          DIR=$(cut -d'|' -f2 /nix/setup-root-node-26.12.0)
-          NODE="$STORE/$DIR/node"
-          echo "  $NODE"
-          ls -l "$NODE"
-          echo "--- interpreter baked into the binary ---"
-          readelf -l "$NODE" 2>/dev/null | grep -i interpreter || true
-          echo "--- ldd ---"
-          ldd "$NODE" | head -6
-          echo "--- it either runs or it does not ---"
-          "$NODE" --version
-          echo "NODE RAN"
-          echo "--- and the python closure ---"
-          PSTORE=$(cut -d'|' -f1 /nix/setup-root-python-*)
-          PDIR=$(cut -d'|' -f2 /nix/setup-root-python-*)
-          ls "$PSTORE/$PDIR" | head -5
-          "$PSTORE/$PDIR/python3" --version
-          echo "PYTHON RAN"
-
   verify-easysetup:
     needs: [server]
     runs-on: ubuntu-latest
-    container:
-      image: debian:trixie-slim
     env:
       # HOSTED: these fixtures build and publish their own artefact. The pull
       # direction for the same protocols is covered by `clients`.
@@ -829,15 +716,19 @@ jobs:
           tools: ${{ matrix.tools }}
 
       # Nothing here installs a language. Everything a BUILD needs beyond the
-      # toolchain - git, zip, python3 for the suites' own helpers - is still
-      # installed, because trixie-slim is a 28 MB image with almost nothing in it.
+      # toolchain - git, zip, a C toolchain for native extensions, jq for the
+      # fixtures - is installed here, and never a language runtime: that is the
+      # toolchain's job and easysetup's whole point.
+      #
+      # `sudo`, because this job now runs on the runner image rather than inside
+      # a container as root.
       - name: install what building a project needs (never a toolchain)
         run: |
           set -eu
-          export DEBIAN_FRONTEND=noninteractive
-          apt-get update -qq
-          apt-get install -y -qq --no-install-recommends \
-            ca-certificates curl git zip unzip build-essential python3 jq
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get update -qq
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            --no-install-recommends \
+            ca-certificates curl git zip unzip build-essential python3 jq zstd
 
       - name: show the toolchain easysetup provided
         run: |
