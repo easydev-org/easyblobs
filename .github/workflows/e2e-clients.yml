@@ -320,6 +320,15 @@ jobs:
           php-version: ${{ env.PHP_VERSION }}
           tools: composer
 
+      # gradle is a hosted protocol with its own fixture now, so the job needs
+      # gradle itself. setup-java above already covers the JDK for the whole
+      # maven family; this adds the build tool.
+      - uses: gradle/actions/setup-gradle@v4
+        if: contains(matrix.protocol, 'gradle')
+        with:
+          # The fixture ships no wrapper, so `gradle` must be on PATH.
+          gradle-version: current
+
       - name: install sbt runner for ivy
         if: contains(matrix.protocol, 'ivy')
         uses: sbt/setup-sbt@v1
@@ -585,6 +594,12 @@ jobs:
         with:
           php-version: ${{ env.PHP_VERSION }}
           tools: composer
+
+      # Same reason as in `clients`: the gradle fixture needs gradle itself.
+      - uses: gradle/actions/setup-gradle@v4
+        if: contains(matrix.protocol, 'gradle')
+        with:
+          gradle-version: current
 
       - name: install sbt runner for ivy
         if: contains(matrix.protocol, 'ivy')

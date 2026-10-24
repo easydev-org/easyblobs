@@ -386,7 +386,21 @@ FIXTURE_DIR=""
 # mapping that pretends coverage exists.
 fixture_dir_for_protocol() {
   case "$1" in
-    maven|gradle|google|clojars|spring|jitpack|ivy) echo java ;;
+    # Several protocols share the maven ADAPTER but not the same client, and a
+    # fixture exists per TOOLCHAIN. Mapping them all to `java` meant gradle and
+    # sbt never ran at all: only one directory can answer for a protocol, so
+    # maven took `java` and the other two were dead weight in the repository.
+    #
+    # Each now maps to the fixture that actually builds with it, and each
+    # fixture publishes under its OWN group (dev.easyblobs.test.{gradle,sbt}),
+    # because three jars at the same coordinate would overwrite each other in
+    # the mirror while all three reported success.
+    maven|google|clojars|spring|jitpack) echo java ;;
+    gradle)    echo gradle ;;
+    # ivy is the resolver sbt is built on, so the sbt fixture is the right
+    # client for it - and it is the only remaining maven-family protocol whose
+    # hosted fixture would otherwise be unused.
+    ivy)       echo sbt ;;
     rubygems)  echo ruby ;;
     nuget)     echo dotnet ;;
     protobuf)  echo buf ;;
