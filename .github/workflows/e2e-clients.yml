@@ -760,12 +760,28 @@ jobs:
             echo "  $(basename "$f"): $(cat "$f")"
           done
           echo "--- which libc does the node binary use? ---"
-          NODE=$(ls -d /nix/store/*-nodejs-*/bin 2>/dev/null | head -1)/node
+          # Take the path from the REGISTRY, not from a glob. The first attempt
+          # globbed /nix/store/*-nodejs-*/bin and picked up
+          # ...-nodejs-slim-...-npm/bin, which has no `node` in it - a bug in the
+          # probe, not a verdict on the binaries.
+          STORE=$(cut -d'|' -f1 /nix/setup-root-node-26.12.0)
+          DIR=$(cut -d'|' -f2 /nix/setup-root-node-26.12.0)
+          NODE="$STORE/$DIR/node"
           echo "  $NODE"
-          ldd "$NODE" | head -5
+          ls -l "$NODE"
+          echo "--- interpreter baked into the binary ---"
+          readelf -l "$NODE" 2>/dev/null | grep -i interpreter || true
+          echo "--- ldd ---"
+          ldd "$NODE" | head -6
           echo "--- it either runs or it does not ---"
           "$NODE" --version
           echo "NODE RAN"
+          echo "--- and the python closure ---"
+          PSTORE=$(cut -d'|' -f1 /nix/setup-root-python-*)
+          PDIR=$(cut -d'|' -f2 /nix/setup-root-python-*)
+          ls "$PSTORE/$PDIR" | head -5
+          "$PSTORE/$PDIR/python3" --version
+          echo "PYTHON RAN"
 
   verify-easysetup:
     needs: [server]
