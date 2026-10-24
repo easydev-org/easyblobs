@@ -34,6 +34,10 @@ PROTO="${1:?usage: ci-run.sh <protocol>}"
 #
 #   pull    the mount serves an UPSTREAM package to a real client and caches it
 #   hosted  a real client PUBLISHES its own artefact and reads it back
+#   build   the toolchain builds a real project, and the client resolves against
+#           the mount, but nothing is published: some protocols are read-only
+#           MIRRORS with no write path, so a publish cannot be exercised at all
+#           and pretending otherwise would be a test of nothing.
 #
 # One direction per job. They fail for unrelated reasons - pull depends on
 # github.com / registry.npmjs.org / pypi.org, hosted depends on nothing outside
@@ -41,8 +45,8 @@ PROTO="${1:?usage: ci-run.sh <protocol>}"
 # first and fails hides the other's result.
 DIRECTION="${E2E_DIRECTION:-pull}"
 case "$DIRECTION" in
-  pull|hosted) ;;
-  *) echo "E2E_DIRECTION must be 'pull' or 'hosted', got '$DIRECTION'" >&2; exit 2 ;;
+  pull|hosted|build) ;;
+  *) echo "E2E_DIRECTION must be 'pull', 'hosted' or 'build', got '$DIRECTION'" >&2; exit 2 ;;
 esac
 export DIRECTION
 
@@ -413,6 +417,14 @@ fixture_dir_for_protocol() {
     hex)       echo elixir ;;
     cargo)     echo rust ;;
     helm)      echo helm ;;
+    # Read-only mirrors: the adapter serves an upstream registry and has no
+    # write path. Their fixtures are still real projects, so they are BUILT
+    # (E2E_BUILD_ONLY) rather than published - which is the only promise these
+    # protocols can be held to.
+    cran)      echo r ;;
+    cpan)      echo perl ;;
+    juliapkg)  echo julia ;;
+    jsr)       echo deno ;;
     *)         echo "$1" ;;
   esac
 }
@@ -536,8 +548,28 @@ case "$DIRECTION" in
     fi
     run_hosted_fixture "$FIXTURE_DIR" || exit 1
     ;;
+  build)
+    # Read-only mirror: the adapter has no write path, so publishing is not a
+    # thing that can fail here - there is nothing to publish TO. What can be
+    # held to account is everything before that: the toolchain builds a real
+    # project from easyblobs-test, its tests run, the artefact is packaged, and
+    # where the client can resolve against the mount it does.
+    if [ -z "$FIXTURE_DIR" ]; then
+      echo "::error::$PROTO has no fixture; add one to easydev-org/easyblobs-test" >&2
+      exit 1
+    fi
+    # POSIX shells do not apply a VAR=value prefix to a FUNCTION call (only to
+    # external commands), so this has to be exported rather than prefixed.
+    E2E_BUILD_ONLY=1
+    export E2E_BUILD_ONLY
+    run_hosted_fixture "$FIXTURE_DIR" || exit 1
+    echo "=== e2e/$PROTO OK (build-only: read-only mirror, nothing to publish) ==="
+    # Nothing was written, so the cache assertion below would fail for the right
+    # reason on the wrong thing. This IS the pass condition.
+    exit 0
+    ;;
   *)
-    echo "E2E_DIRECTION must be 'pull' or 'hosted', got '$DIRECTION'" >&2
+    echo "E2E_DIRECTION must be 'pull', 'hosted' or 'build', got '$DIRECTION'" >&2
     exit 2
     ;;
 esac

@@ -45,10 +45,10 @@ def rows():
         # makes two promises and they are tested as separate jobs, so the set
         # has to be stated in the source of truth rather than guessed.
         hosted = parts[2].strip() if len(parts) > 2 else "pull-only"
-        if hosted not in ("hosted", "pull-only"):
+        if hosted not in ("hosted", "pull-only", "build-only"):
             raise SystemExit(
-                f"genmatrix: third column must be 'hosted' or 'pull-only', "
-                f"got {hosted!r} for {proto!r}"
+                f"genmatrix: third column must be 'hosted', 'pull-only' or "
+                f"'build-only', got {hosted!r} for {proto!r}"
             )
         if not proto or not runner:
             raise SystemExit(f"genmatrix: empty protocol or runner: {raw!r}")
@@ -68,6 +68,7 @@ def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "--app"
     app, distro = [], []
     hosted = []
+    build_only = []
     for proto, runner, direction in rows():
         if runner.startswith("container:"):
             image = runner.split(":", 1)[1].strip()
@@ -81,6 +82,9 @@ def main():
             # no hosted job, because there is nothing to publish.
             if direction == "hosted":
                 hosted.append(proto)
+            elif direction == "build-only":
+                # Read-only mirror: its fixture is built, nothing is published.
+                build_only.append(proto)
         else:
             raise SystemExit(
                 f"genmatrix: unknown runner {runner!r} for {proto!r} "
@@ -91,6 +95,9 @@ def main():
         print(json.dumps({"protocol": app}))
     elif mode == "--hosted":
         print(json.dumps({"protocol": hosted}))
+    elif mode == "--build-only":
+        # Read-only mirrors: the fixture is built, nothing is published.
+        print(json.dumps({"protocol": build_only}))
     elif mode == "--distro":
         print(json.dumps({"include": distro}))
     else:
