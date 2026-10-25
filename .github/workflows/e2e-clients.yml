@@ -1010,19 +1010,22 @@ jobs:
       - uses: easydev-org/easysetup@main
         with:
           tools: ${{ matrix.tools }}
-          # Pin the BINARY, not the action.
+          # NO cli-version pin. I tried one and it broke every verify-easysetup
+          # job with:
+          #   easysetup v2026.10.24-92cc0e8 for linux/amd64
+          #   ##[error]published checksum is empty
           #
-          # The action is a thin wrapper: download a static binary, run
-          # `easysetup install <tools>`, append the tool dirs to GITHUB_PATH.
-          # That wrapper changing under us is low-risk and worth the fixes. The
-          # binary is the thing that actually resolves the manifest, fetches
-          # closures and unpacks them, so pinning it is what makes a run
-          # reproducible: today green, tomorrow still the same installer.
+          # The release DOES publish the file - a direct fetch of
+          # .../v2026.10.24-92cc0e8/easysetup-linux-amd64.sha256 returns 65
+          # bytes - so this is a bug in the action's pinned path, not in the
+          # release. The unpinned path works: it resolves the tag through
+          # /releases/latest and downloads successfully, which is what those 11
+          # jobs had been doing.
           #
-          # It also means an upstream change to the binary shows up here as a
-          # deliberate bump (one line, reviewable) rather than as an unexplained
-          # difference between two runs of the same commit.
-          cli-version: v2026.10.24-92cc0e8
+          # Reported upstream rather than worked around: the alternative is
+          # vendoring the checksum file or re-implementing the download here,
+          # and both would hide the defect while adding machinery we would have
+          # to keep in sync.
 
       # Nothing here installs a language. Everything a BUILD needs beyond the
       # toolchain - git, zip, a C toolchain for native extensions, jq for the
