@@ -968,6 +968,43 @@ jobs:
           name: easyblobs-log-hosted-${{ matrix.protocol }}
           path: /tmp/easyblobs.log
           if-no-files-found: ignore
+  # Probe: what does the action actually contain today?
+  #
+  # The last CI run failed inside the action with 'published checksum is
+  # empty'. I traced the extraction to a sed that cannot match a bare hash,
+  # but @main in the repo still shows that sed - so before changing anything
+  # again, ask the runner what it downloads.
+  probe-action:
+    runs-on: ubuntu-latest
+    steps:
+      - name: fetch the action definition the runner would use
+        run: |
+          set -eu
+          curl -fsSL --retry 3 \
+            https://raw.githubusercontent.com/easydev-org/easysetup/main/action.yml \
+            -o /tmp/action.yml
+          echo '--- how the checksum is extracted ---'
+          grep -n 'want=' /tmp/action.yml || echo 'NO want= LINE'
+          echo '--- the download lines ---'
+          grep -n 'sha256\|easysetup-linux' /tmp/action.yml || true
+
+      - name: what does the published .sha256 really contain
+        run: |
+          set -eu
+          tag=$(curl -fsSI \
+            https://github.com/easydev-org/easysetup-cli/releases/latest \
+            | grep -i '^location:' | sed 's|.*/tag/||' | tr -d '\r\n')
+          echo "latest tag: $tag"
+          url="https://github.com/easydev-org/easysetup-cli/releases/download/$tag/easysetup-linux-amd64.sha256"
+          curl -fsSL --retry 3 -o /tmp/sha "$url"
+          echo "bytes: $(wc -c < /tmp/sha)"
+          echo '--- od ---'
+          od -c /tmp/sha | head -3
+          echo '--- the action sed ---'
+          got=$(sed -n '1s/[[:space:]].*//p' /tmp/sha)
+          echo "action sed gives: [$got]"
+          if [ -n "$got" ]; then echo 'ACTION SED WORKS'; else echo 'ACTION SED IS BROKEN'; fi
+
   verify-easysetup:
     needs: [server]
     runs-on: ubuntu-latest
