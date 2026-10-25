@@ -968,59 +968,6 @@ jobs:
           name: easyblobs-log-hosted-${{ matrix.protocol }}
           path: /tmp/easyblobs.log
           if-no-files-found: ignore
-  probe-perm:
-    runs-on: ubuntu-latest
-    steps:
-      - name: fetch the binary the action would use
-        run: |
-          set -eu
-          tag=$(curl -fsSI \
-            https://github.com/easydev-org/easysetup-cli/releases/latest \
-            | grep -i '^location:' | sed 's|.*/tag/||' | tr -d '\r\n')
-          echo "tag=$tag"
-          curl -fsSL --retry 5 --retry-all-errors \
-            -o /tmp/easysetup \
-            "https://github.com/easydev-org/easysetup-cli/releases/download/$tag/easysetup-linux-amd64"
-          chmod +x /tmp/easysetup
-          /tmp/easysetup --version || true
-
-      - name: prepare, then look at what it made
-        run: |
-          set -eu
-          /tmp/easysetup prepare
-          echo '--- ownership after prepare ---'
-          ls -ld /nix /nix/store
-          id
-
-      - name: install as the normal user (the action's way)
-        run: |
-          set +e
-          /tmp/easysetup install jq 2>&1 | tail -5
-          echo "install-as-user rc=$?"
-          echo '--- ownership now ---'
-          ls -ld /nix/store 2>/dev/null || true
-          ls /nix/store 2>/dev/null | head -3 || true
-
-      - name: install under sudo
-        run: |
-          set +e
-          sudo /tmp/easysetup install go 2>&1 | tail -8
-          echo "install-as-root rc=$?"
-          echo '--- result ---'
-          ls /nix/setup-root-* 2>/dev/null || echo 'no setup-root files'
-          ls -ld /nix/store/*go* 2>/dev/null | head -3 || true
-
-      - name: can a normal user then USE it
-        run: |
-          set +e
-          for f in /nix/setup-root-*; do
-            [ -f "$f" ] || continue
-            echo "$(basename "$f"): $(cat "$f")"
-          done
-          D=$(cut -d'|' -f1 /nix/setup-root-go-* 2>/dev/null)
-          echo "go store: $D"
-          "$D/bin/go" version 2>&1 | head -2
-
   verify-easysetup:
     needs: [server]
     runs-on: ubuntu-latest
@@ -1060,25 +1007,59 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: easydev-org/easysetup@main
-        with:
-          tools: ${{ matrix.tools }}
-          # NO cli-version pin. I tried one and it broke every verify-easysetup
-          # job with:
-          #   easysetup v2026.10.24-92cc0e8 for linux/amd64
-          #   ##[error]published checksum is empty
-          #
-          # The release DOES publish the file - a direct fetch of
-          # .../v2026.10.24-92cc0e8/easysetup-linux-amd64.sha256 returns 65
-          # bytes - so this is a bug in the action's pinned path, not in the
-          # release. The unpinned path works: it resolves the tag through
-          # /releases/latest and downloads successfully, which is what those 11
-          # jobs had been doing.
-          #
-          # Reported upstream rather than worked around: the alternative is
-          # vendoring the checksum file or re-implementing the download here,
-          # and both would hide the defect while adding machinery we would have
-          # to keep in sync.
+      # easysetup, driven EXPLICITLY rather than through its action.
+      #
+      # The action runs `prepare` under sudo and `install` as the runner user,
+      # and on a GitHub runner that second step cannot work:
+      #
+      #   not root; creating /nix/store with sudo
+      #   created /nix/store (mode 777)
+      #   ... mkdir /nix/store/<hash>-bash-5.3p20/lib: permission denied
+      #
+      # The store is 777 so new entries can be created, but `install` unpacks
+      # dependencies (base-2.44: bash, glibc) that are already there and owned
+      # by root. Measured: sudo install succeeds, and the runner user can then
+      # EXECUTE what was installed (go version -> go1.27.3), which is all the
+      # fixtures need afterwards.
+      - name: install the toolchain with easysetup
+        env:
+          TOOLS: ${{ matrix.tools }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The same pinned source of truth as the action: newest easysetup-cli
+          # release, verified against its published digest.
+          tag=$(curl -fsSI --retry 3 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            https://github.com/easydev-org/easysetup-cli/releases/latest \
+            | grep -i '^location:' | sed 's|.*/tag/||' | tr -d '\r\n')
+          echo "easysetup $tag"
+          base="https://github.com/easydev-org/easysetup-cli/releases/download/$tag"
+          curl -fsSL --retry 5 --retry-all-errors \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -o /tmp/easysetup "$base/easysetup-linux-amd64"
+          curl -fsSL --retry 5 --retry-all-errors \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -o /tmp/easysetup.sha256 "$base/easysetup-linux-amd64.sha256"
+          # Strip whitespace and keep the digest: the published file is a bare
+          # hash plus newline, but this accepts the 'hash  name' form too.
+          want=$(tr -d '[:space:]' < /tmp/easysetup.sha256 | cut -c1-64)
+          [ -n "$want" ] || { echo '::error::published checksum is empty'; exit 1; }
+          chmod +x /tmp/easysetup
+          /tmp/easysetup checksum --expect "$want" /tmp/easysetup
+          # sudo, because install writes into a root-owned store (see above).
+          sudo /tmp/easysetup prepare
+          sudo /tmp/easysetup install $TOOLS
+          # Expose the toolchain exactly as the action does: env.sh plus PATH.
+          sudo /tmp/easysetup env /opt/setup/env.sh
+          sudo chmod 755 /opt/setup/env.sh
+          # shellcheck disable=SC2013
+          for d in /nix/setup-root-*; do
+            [ -f "$d" ] || continue
+            dir=$(cut -d'|' -f1,2 "$d" | tr '|' '/')
+            echo "$dir" >> "$GITHUB_PATH"
+          done
+          echo "EASYSETUP_ENV=/opt/setup/env.sh" >> "$GITHUB_ENV"
 
       # Nothing here installs a language. Everything a BUILD needs beyond the
       # toolchain - git, zip, a C toolchain for native extensions, jq for the

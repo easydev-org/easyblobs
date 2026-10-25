@@ -1,0 +1,26 @@
+fix(e2e): run 'easysetup install' under sudo; the action's split is unwritable
+
+After the checksum parser was fixed, all 11 jobs still failed with:
+
+  not root; creating /nix/store with sudo
+  created /nix/store (mode 777)
+  easysetup: ./nix/store/<hash>-bash-5.3p20/lib/:
+    mkdir /nix/store/<hash>-bash-5.3p20/lib: permission denied
+
+The action sudos 'prepare' and then runs 'install' as the runner user. The store
+ends up 777, so NEW entries can be created, but 'install' also unpacks
+dependencies - base-2.44 is bash and glibc - into paths that already exist and
+are owned by root. Its own help says prepare needs root; install needs the same
+access for the same reason.
+
+Measured before changing anything (probe-perm job):
+
+  prepare        -> /nix and /nix/store both drwxrwxrwx root root
+  install jq     -> permission denied, mkdir .../bash-5.3p20/lib
+  sudo install   -> installed: base-2.44 go-1.27.3
+  runner runs go -> go version go1.27.3
+
+So installing as root and USING as the runner user works, which is exactly what
+the fixtures need. The step is written out explicitly rather than through the
+action: same pinned source (newest easysetup-cli), same checksum verification,
+same PATH/env.sh wiring, one extra sudo.
