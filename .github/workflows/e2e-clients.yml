@@ -968,6 +968,58 @@ jobs:
           name: easyblobs-log-hosted-${{ matrix.protocol }}
           path: /tmp/easyblobs.log
           if-no-files-found: ignore
+  probe-nosudo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: fetch the easysetup binary
+        run: |
+          set -eu
+          tag=$(curl -fsSI --retry 3 \
+            https://github.com/easydev-org/easysetup-cli/releases/latest \
+            | grep -i '^location:' | sed 's|.*/tag/||' | tr -d '\r\n')
+          echo "easysetup tag: $tag"
+          base="https://github.com/easydev-org/easysetup-cli/releases/download/$tag"
+          curl -fsSL --retry 5 --retry-all-errors -o /tmp/easysetup "$base/easysetup-linux-amd64"
+          chmod +x /tmp/easysetup
+          /tmp/easysetup --version || true
+
+      - name: prepare (it sudos internally)
+        run: |
+          set -eu
+          /tmp/easysetup prepare
+          echo '--- /nix ---'
+          ls -ld /nix /nix/store
+
+      - name: install WITHOUT sudo - the question
+        run: |
+          set +e
+          /tmp/easysetup install go 2>&1 | tail -12
+          rc=$?
+          echo "INSTALL_WITHOUT_SUDO_RC=$rc"
+          echo '--- what landed ---'
+          ls /nix/setup-root-* 2>/dev/null || echo 'no setup-root files'
+          du -sh /nix/store 2>/dev/null || true
+
+      - name: how many paths did the go setup really ship
+        run: |
+          set +e
+          D=$(cut -d'|' -f1 /nix/setup-root-go-* 2>/dev/null)
+          echo "go store: $D"
+          if [ -n "$D" ] && [ -d "$D" ]; then
+            echo "paths in /nix/store: $(ls /nix/store | wc -l)"
+            echo '--- is bash/glibc there (it should NOT be, for a delta) ---'
+            ls /nix/store | grep -cE 'bash|glibc' || true
+            ls /nix/store | head -8
+          fi
+
+      - name: can the runner user run it
+        run: |
+          set +e
+          D=$(cut -d'|' -f1 /nix/setup-root-go-* 2>/dev/null)
+          DIR=$(cut -d'|' -f2 /nix/setup-root-go-* 2>/dev/null)
+          "$D/$DIR/go" version 2>&1 | head -2
+          echo "GO_RAN_RC=$?"
+
   verify-easysetup:
     needs: [server]
     runs-on: ubuntu-latest
