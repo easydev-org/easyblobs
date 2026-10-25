@@ -1007,23 +1007,59 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The toolchains come from easydev-org/easysetup and from nothing else.
+      # easysetup, driven explicitly so `install` can run as root.
       #
-      # Each setup is a prebuilt nix closure: one download, one unpack, no apt,
-      # no compilation. The action downloads a static binary, runs
-      # `easysetup install <tools>`, and puts the tool directories on
-      # $GITHUB_PATH so the next step just finds them.
+      # The action sudos `prepare` and then runs `install` as the runner user.
+      # That is not enough for every setup: measured on 2026-10-25, go / node /
+      # dotnet / helm / ruby / php / cargo install fine unprivileged, while
+      # java+maven, conda, elixir+erlang and python+pip fail with
       #
-      # This job used to drive the binary itself, with sudo, to work around two
-      # upstream defects - a checksum parser that could not read a bare digest,
-      # and a packaging bug that copied base+glibc into every delta tarball and
-      # made an unprivileged install write into read-only store paths. Both are
-      # fixed upstream (63a865ce, 39f52c02), and re-measured here: install
-      # succeeds without sudo and the store holds only what the setup needs.
-      # So the workaround is gone and this is the plain action again.
-      - uses: easydev-org/easysetup@main
-        with:
-          tools: ${{ matrix.tools }}
+      #   easysetup: .../set-java-classpath-hook/nix-support/setup-hook:
+      #     open .../setup-hook: permission denied
+      #
+      # i.e. a write over a path that already exists in a dependency closure.
+      # Under sudo every one of them completes, and the runner user can still
+      # RUN what was installed (store paths are r-xr-xr-x), which is all the
+      # fixtures need afterwards.
+      #
+      # This mirrors the action - same release, same checksum check, same PATH
+      # and env.sh wiring - with sudo on the two commands that write to /nix.
+      - name: install the toolchain with easysetup
+        env:
+          TOOLS: ${{ matrix.tools }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=$(curl -fsSI --retry 3 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            https://github.com/easydev-org/easysetup-cli/releases/latest \
+            | grep -i '^location:' | sed 's|.*/tag/||' | tr -d '\r\n')
+          echo "easysetup $tag"
+          base="https://github.com/easydev-org/easysetup-cli/releases/download/$tag"
+          curl -fsSL --retry 5 --retry-all-errors \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -o /tmp/easysetup "$base/easysetup-linux-amd64"
+          curl -fsSL --retry 5 --retry-all-errors \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -o /tmp/easysetup.sha256 "$base/easysetup-linux-amd64.sha256"
+          # Strip whitespace and keep the digest: the published file is a bare
+          # hash plus newline, but this accepts the 'hash  name' form too.
+          want=$(tr -d '[:space:]' < /tmp/easysetup.sha256 | cut -c1-64)
+          [ -n "$want" ] || { echo '::error::published checksum is empty'; exit 1; }
+          chmod +x /tmp/easysetup
+          /tmp/easysetup checksum --expect "$want" /tmp/easysetup
+          sudo /tmp/easysetup prepare
+          sudo /tmp/easysetup install $TOOLS
+          # Expose the toolchain the way the action does: env.sh plus PATH.
+          sudo /tmp/easysetup env /opt/setup/env.sh
+          sudo chmod 755 /opt/setup/env.sh
+          # shellcheck disable=SC2013
+          for d in /nix/setup-root-*; do
+            [ -f "$d" ] || continue
+            dir=$(cut -d'|' -f1,2 "$d" | tr '|' '/')
+            echo "$dir" >> "$GITHUB_PATH"
+          done
+          echo "EASYSETUP_ENV=/opt/setup/env.sh" >> "$GITHUB_ENV"
 
       # Nothing here installs a language. Everything a BUILD needs beyond the
       # toolchain - git, zip, a C toolchain for native extensions, jq for the

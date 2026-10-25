@@ -1,0 +1,23 @@
+fix(e2e): keep the sudo'd install; the plain action still fails for 4 setups
+
+I reverted to the plain action on the belief that the tarball fix made sudo
+unnecessary. It does not, for every setup. Measured on the reverted run:
+
+  unprivileged install OK    go, node, dotnet, helm, ruby, php, cargo
+  permission denied          java+maven, conda, elixir+erlang, python+pip
+
+The failures stop at a path that already exists inside a dependency closure:
+
+  easysetup: ./nix/store/<hash>-set-java-classpath-hook/nix-support/setup-hook:
+    open .../setup-hook: permission denied
+
+base-2.44, coreutils and java unpack fine first; maven is where it stops. So
+39f52c02 removed the base+glibc pollution but something in the dependency chain
+still writes over root-owned store paths.
+
+My earlier probe only installed `go`, which is why it looked solved: go's
+dependency set is small enough to avoid the case. That is the lesson - one
+setup passing says nothing about a protocol whose toolchain installs a hook.
+
+Restored. The comment now records which setups were measured and why the sudo
+is there, so the next person does not remove it on the same reasoning I did.
