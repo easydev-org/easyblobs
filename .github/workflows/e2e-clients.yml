@@ -968,6 +968,59 @@ jobs:
           name: easyblobs-log-hosted-${{ matrix.protocol }}
           path: /tmp/easyblobs.log
           if-no-files-found: ignore
+  probe-perm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: fetch the binary the action would use
+        run: |
+          set -eu
+          tag=$(curl -fsSI \
+            https://github.com/easydev-org/easysetup-cli/releases/latest \
+            | grep -i '^location:' | sed 's|.*/tag/||' | tr -d '\r\n')
+          echo "tag=$tag"
+          curl -fsSL --retry 5 --retry-all-errors \
+            -o /tmp/easysetup \
+            "https://github.com/easydev-org/easysetup-cli/releases/download/$tag/easysetup-linux-amd64"
+          chmod +x /tmp/easysetup
+          /tmp/easysetup --version || true
+
+      - name: prepare, then look at what it made
+        run: |
+          set -eu
+          /tmp/easysetup prepare
+          echo '--- ownership after prepare ---'
+          ls -ld /nix /nix/store
+          id
+
+      - name: install as the normal user (the action's way)
+        run: |
+          set +e
+          /tmp/easysetup install jq 2>&1 | tail -5
+          echo "install-as-user rc=$?"
+          echo '--- ownership now ---'
+          ls -ld /nix/store 2>/dev/null || true
+          ls /nix/store 2>/dev/null | head -3 || true
+
+      - name: install under sudo
+        run: |
+          set +e
+          sudo /tmp/easysetup install go 2>&1 | tail -8
+          echo "install-as-root rc=$?"
+          echo '--- result ---'
+          ls /nix/setup-root-* 2>/dev/null || echo 'no setup-root files'
+          ls -ld /nix/store/*go* 2>/dev/null | head -3 || true
+
+      - name: can a normal user then USE it
+        run: |
+          set +e
+          for f in /nix/setup-root-*; do
+            [ -f "$f" ] || continue
+            echo "$(basename "$f"): $(cat "$f")"
+          done
+          D=$(cut -d'|' -f1 /nix/setup-root-go-* 2>/dev/null)
+          echo "go store: $D"
+          "$D/bin/go" version 2>&1 | head -2
+
   verify-easysetup:
     needs: [server]
     runs-on: ubuntu-latest
