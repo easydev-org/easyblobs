@@ -33,36 +33,22 @@ let d = ["ok": true]
 let j = try! JSONSerialization.data(withJSONObject: d)
 print("swift + foundation: " + String(data: j, encoding: .utf8)!)
 X
-# swiftc needs the Swift RUNTIME libraries, not just the compiler. Report which
-# of the two is missing instead of letting the linker's message stand alone:
-#   error: link command failed
-#   cannot find -lswiftCore
-# is a broken toolchain, not a broken program, and the fix is different.
-if ! out=$(swiftc main.swift -o "$W/app" 2>&1); then
-  echo "swift: swiftc failed:" >&2
+# swiftc needs -L for its runtime libraries. Once the toolchain is moved into
+# /nix/store the compiler loses the prefix inference it normally does for itself,
+# so it never looks in its own lib/ and the link fails:
+#   ld.bfd: cannot find -lswiftCore: No such file or directory
+#
+# The libraries are in <prefix>/lib - libswiftCore.so sits beside the compiler's
+# tree, NOT under lib/swift/linux (that holds the .swiftmodule interfaces). My
+# earlier reading of this was wrong for exactly that reason: I checked
+# lib/swift/linux and lib/swift, found no .so, and called it a packaging gap.
+SWIFT_LIB="$(dirname "$(dirname "$(readlink -f "$(command -v swiftc)")")")/lib"
+[ -d "$SWIFT_LIB" ] || { echo "swift: no $SWIFT_LIB beside swiftc" >&2; exit 1; }
+if ! out=$(swiftc main.swift -o "$W/app" -L"$SWIFT_LIB" 2>&1); then
+  echo "swift: swiftc failed even with -L$SWIFT_LIB:" >&2
   echo "$out" | tail -15 >&2
-  # Where the compiler lives, and what is actually beside it. A link failure for
-  # -lswiftCore is a broken toolchain, not a broken program, and the two have
-  # different fixes - so say which one this is instead of leaving the linker's
-  # output to be read as a client bug.
-  SWIFTC=$(readlink -f "$(command -v swiftc)")
-  ROOT=$(dirname "$(dirname "$SWIFTC")")
-  echo "swift: swiftc = $SWIFTC" >&2
-  echo "swift: prefix = $ROOT" >&2
-  for d in "$ROOT/lib/swift/linux" "$ROOT/lib/swift" "$ROOT/lib"; do
-    if [ -d "$d" ]; then
-      n=$(ls "$d" 2>/dev/null | wc -l)
-      core=$(ls "$d" 2>/dev/null | grep -c '^libswiftCore' || true)
-      echo "swift: $d -> $n entries, libswiftCore*: $core" >&2
-      [ "$core" = 0 ] && ls "$d" 2>/dev/null | head -8 >&2
-    else
-      echo "swift: $d does not exist" >&2
-    fi
-  done
-  find "$ROOT" -name 'libswiftCore*' 2>/dev/null | head -3 >&2 || true
-  echo "swift: if libswiftCore is nowhere under the prefix, the closure ships the" >&2
-  echo "swift: compiler without its runtime libraries - an easysetup packaging gap," >&2
-  echo "swift: not something this suite or the mirror can fix." >&2
+  echo "swift: libswiftCore* in that prefix:" >&2
+  ls "$SWIFT_LIB" 2>/dev/null | grep '^libswiftCore' >&2 || echo "  (none)" >&2
   exit 1
 fi
 "$W/app"
