@@ -101,14 +101,17 @@ func (s *State) publish(w http.ResponseWriter, r *http.Request, name string) {
 			continue
 		}
 		pkgJSON, _ := raw.(map[string]any)
+		// A document with no _attachments is a METADATA update (npm deprecate,
+		// npm dist-tag): it carries every version so the flags can be applied to
+		// the ones that already exist. It must not replace an artefact with an
+		// empty one - but a version that does not exist yet is still stored, as
+		// it always was, so a client that omits _attachments does not stop being
+		// able to publish.
 		if tarball == nil {
-			// No payload attached: this is a metadata-only update (deprecate,
-			// dist-tag). Apply it to the version that already exists instead of
-			// storing an empty artefact over it.
 			if s.updateVersionMeta(r.Context(), pkgName, ver, pkgJSON) {
 				stored++
+				continue
 			}
-			continue
 		}
 		s.storeVersion(r.Context(), pkgName, ver, tarball, pkgJSON, "push")
 		stored++
