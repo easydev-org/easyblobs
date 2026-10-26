@@ -122,9 +122,10 @@ echo "== gem push =="
 mkdir -p "$HOME/.gem"
 printf -- '---\n:rubygems_api_key: e2e\n' > "$HOME/.gem/credentials"
 chmod 600 "$HOME/.gem/credentials"
-# ruby 4's gem push accepts neither --host nor --source; it pushes to the FIRST
-# configured source, and the mount is the only one this suite adds.
-gem push "$NAME-$VER.gem" 2>&1 | tail -3 || fail "gem push"
+# Bare `gem push` pushes to Gem.host (rubygems.org); --host redirects it. This
+# was the original form, and it was right - I broke it by "fixing" a
+# Gem::OptionParser::InvalidOption that came from my own --source, not --host.
+gem push --host "$SRC" "$NAME-$VER.gem" 2>&1 | tail -3 || fail "gem push"
 
 echo "== the index lists the version =="
 curl -fsS "${SRC}info/$NAME" | grep -q "$VER" || fail "the pushed version is not in the index"
