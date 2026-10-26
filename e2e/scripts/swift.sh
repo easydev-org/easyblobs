@@ -21,12 +21,17 @@ print("releases:", body[:140])
 PY
 
 # Compile/run assertion: build a Swift binary against the Foundation module.
-mkdir -p /w && cd ${E2E_W:-/w}
+#
+# $E2E_W is the writable work dir ci-run.sh exports. This used to `mkdir -p /w`,
+# which is a root-only path - on a normal runner the mkdir fails and every
+# subsequent step runs in the wrong directory.
+W="${E2E_W:-$(mktemp -d)}"
+mkdir -p "$W" && cd "$W"
 cat > main.swift <<'X'
 import Foundation
 let d = ["ok": true]
 let j = try! JSONSerialization.data(withJSONObject: d)
 print("swift + foundation: " + String(data: j, encoding: .utf8)!)
 X
-swiftc main.swift -o ${E2E_W:-/w}/app
-${E2E_W:-/w}/app
+swiftc main.swift -o "$W/app"
+"$W/app"

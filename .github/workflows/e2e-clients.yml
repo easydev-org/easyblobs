@@ -156,6 +156,10 @@ jobs:
       # The tool list is chosen from the protocol: the matrix decides which
       # of these applies, and a protocol with no entry installs nothing.
       - uses: easydev-org/easysetup@main
+        # oci and netcache need no toolchain: their suites use
+        # curl and the mount itself. easysetup refuses an empty
+        # list, so the step is skipped rather than called with nothing.
+        if: matrix.tools != ''
         with:
           tools: ${{ matrix.tools }}
 
@@ -225,6 +229,10 @@ jobs:
       # The tool list is chosen from the protocol: the matrix decides which
       # of these applies, and a protocol with no entry installs nothing.
       - uses: easydev-org/easysetup@main
+        # oci and netcache need no toolchain: their suites use
+        # curl and the mount itself. easysetup refuses an empty
+        # list, so the step is skipped rather than called with nothing.
+        if: matrix.tools != ''
         with:
           tools: ${{ matrix.tools }}
 
@@ -334,7 +342,6 @@ jobs:
       # Unprivileged install of java+maven, conda, elixir+erlang and python+pip
       # now returns 0 and the resulting tools run: openjdk 25.0.4.1, Maven
       # 3.9.16, conda 26.7.1, Python 3.13.16, pip 26.1.2.
-      - uses: easydev-org/easysetup@main
         with:
           tools: ${{ matrix.tools }}
 

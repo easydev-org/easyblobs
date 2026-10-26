@@ -103,7 +103,14 @@ echo "== build: a crate with a build script =="
 mkdir -p p4/src && cd p4
 printf '%s\n' '[package]' 'name = "p4"' 'version = "0.1.0"' 'edition = "2021"' '' \
   '[dependencies]' 'libc = "0.2"' > Cargo.toml
-printf '%s\n' 'fn main() { println!("libc: {}", libc::getpid() > 0); }' > src/main.rs
+# getpid returns pid_t, which is not comparable to the integer literal without a
+# cast - the first version of this line failed to compile and read like a broken
+# package.
+printf '%s\n' \
+  'fn main() {' \
+  '    let pid = libc::getpid();' \
+  '    println!("libc: {}", pid > 0);' \
+  '}' > src/main.rs
 cargo run --quiet 2>/dev/null | grep -q 'libc: true' || fail "libc is not usable"
 cd "$WORK"
 

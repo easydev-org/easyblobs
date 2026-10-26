@@ -4,9 +4,15 @@
 set -e
 : "${EASYBLOBS_BASE:?EASYBLOBS_BASE not set}"
 export HF_ENDPOINT="$EASYBLOBS_BASE"
-pip install --no-cache-dir --quiet huggingface_hub >/dev/null 2>&1
+# `pip` may be a separate setup from the interpreter it was built for, so it can
+# exist without belonging to the python3 on PATH. Ask the interpreter for its own
+# pip, and let the error through - `--quiet ... >/dev/null 2>&1` turned a real
+# failure into a silent one.
+python3 -m pip install --no-cache-dir --quiet huggingface_hub ||
+  python3 -m pip install --no-cache-dir huggingface_hub
 # Run assertion: fetch the file and parse it as JSON.
-python - <<'PY'
+# python3, not python: the setupless interpreter ships python3 and nothing else.
+python3 - <<'PY'
 import json, huggingface_hub as h
 p = h.hf_hub_download('bert-base-uncased', 'config.json')
 cfg = json.load(open(p))
