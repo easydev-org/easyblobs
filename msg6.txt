@@ -1,0 +1,27 @@
+revert: back to the plain easysetup action; all three causes are fixed
+
+The hand-written sudo install existed to work around three upstream defects.
+Each was re-measured here, with the SAMPLE THAT MATTERS, before removing it:
+
+  checksum parser   63a865ce
+  tarball pollution 39f52c02
+  duplicate paths   c064fcff
+
+The last one is the one I got wrong twice. It looked like a privilege problem
+and was not: a store path shared by exactly TWO setups stayed in both own lists,
+so it was packaged twice, and whichever install ran second could not write a path
+the first had made read-only. base only absorbed paths shared by >=50% of setups,
+so a path shared by exactly two was never absorbed - 3050 overlapping pairs, 392
+distinct paths, 57% duplicate bytes. Each shared path now has one owner and the
+others gain a dependency edge.
+
+Measured without sudo, on the four setups that used to fail:
+
+  java maven      INSTALL_RC=0  openjdk 25.0.4.1, Apache Maven 3.9.16
+  conda           INSTALL_RC=0  conda 26.7.1
+  elixir erlang   INSTALL_RC=0  erlang-28.x unpacked
+  python pip      INSTALL_RC=0  Python 3.13.16, pip 26.1.2
+
+My previous attempt at this revert used a probe that installed only `go` and
+passed - go's dependency set is too small to hit the case, so one setup passing
+said nothing. Testing the four that failed is why this one holds.

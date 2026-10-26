@@ -968,65 +968,6 @@ jobs:
           name: easyblobs-log-hosted-${{ matrix.protocol }}
           path: /tmp/easyblobs.log
           if-no-files-found: ignore
-  probe-nosudo2:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # The setups that used to fail, plus the lightest one as a control.
-        tools:
-          - "java maven"
-          - "conda"
-          - "elixir erlang"
-          - "python pip"
-          - "go"
-    steps:
-      - name: fetch the easysetup binary
-        run: |
-          set -eu
-          tag=$(curl -fsSI --retry 3 \
-            https://github.com/easydev-org/easysetup-cli/releases/latest \
-            | grep -i '^location:' | sed 's|.*/tag/||' | tr -d '\r\n')
-          echo "easysetup tag: $tag"
-          base="https://github.com/easydev-org/easysetup-cli/releases/download/$tag"
-          curl -fsSL --retry 5 --retry-all-errors -o /tmp/easysetup "$base/easysetup-linux-amd64"
-          chmod +x /tmp/easysetup
-
-      - name: prepare
-        run: |
-          set -eu
-          /tmp/easysetup prepare
-          ls -ld /nix /nix/store
-
-      - name: install WITHOUT sudo
-        env:
-          TOOLS: ${{ matrix.tools }}
-        run: |
-          set +e
-          /tmp/easysetup install $TOOLS 2>&1 | tail -20
-          echo "INSTALL_RC=$?"
-          echo '--- setup-root files ---'
-          ls /nix/setup-root-* 2>/dev/null || echo 'NONE'
-          echo "--- store size: $(du -sh /nix/store 2>/dev/null | cut -f1) ---"
-
-      - name: can the runner user run a tool from each setup
-        env:
-          TOOLS: ${{ matrix.tools }}
-        run: |
-          set +e
-          for f in /nix/setup-root-*; do
-            [ -f "$f" ] || continue
-            store=$(cut -d'|' -f1 "$f"); dir=$(cut -d'|' -f2 "$f")
-            echo "$(basename "$f"): $store|$dir"
-          done
-          # Run whatever the setup put on PATH.
-          PATH=$(for f in /nix/setup-root-*; do s=$(cut -d'|' -f1 "$f"); d=$(cut -d'|' -f2 "$f"); printf '%s/%s:' "$s" "$d"; done)$PATH
-          export PATH
-          for c in java mvn conda elixir erl python3 pip go; do
-            command -v "$c" >/dev/null 2>&1 && { printf '%-8s ' "$c"; "$c" --version 2>&1 | head -1; }
-          done
-          echo "TOOL_CHECK_DONE"
-
   verify-easysetup:
     needs: [server]
     runs-on: ubuntu-latest
@@ -1066,59 +1007,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # easysetup, driven explicitly so `install` can run as root.
+      # The toolchains come from easydev-org/easysetup and from nothing else.
       #
-      # The action sudos `prepare` and then runs `install` as the runner user.
-      # That is not enough for every setup: measured on 2026-10-25, go / node /
-      # dotnet / helm / ruby / php / cargo install fine unprivileged, while
-      # java+maven, conda, elixir+erlang and python+pip fail with
+      # Each setup is a prebuilt nix closure: one download, one unpack, no apt,
+      # no compilation, no dependency resolution. The action fetches a static
+      # binary, runs `easysetup install <tools>`, and appends the tool
+      # directories to $GITHUB_PATH so the next step simply finds them.
       #
-      #   easysetup: .../set-java-classpath-hook/nix-support/setup-hook:
-      #     open .../setup-hook: permission denied
+      # This job drove the binary itself with sudo for a while, to work around
+      # three upstream defects. All three are fixed, and each was re-measured
+      # here before the workaround was removed:
       #
-      # i.e. a write over a path that already exists in a dependency closure.
-      # Under sudo every one of them completes, and the runner user can still
-      # RUN what was installed (store paths are r-xr-xr-x), which is all the
-      # fixtures need afterwards.
+      #   checksum parser (63a865ce)  could not read a bare digest, so every
+      #                               install died with 'published checksum is
+      #                               empty'
+      #   tarball pollution (39f52c02) the chroot check copied base and glibc
+      #                               into $STAGE/nix/store, so a 3-path setup
+      #                               shipped 11
+      #   duplicate paths (c064fcff)  a path shared by exactly two setups
+      #                               stayed in both own lists, was packaged
+      #                               twice, and the second install could not
+      #                               write what the first made read-only
       #
-      # This mirrors the action - same release, same checksum check, same PATH
-      # and env.sh wiring - with sudo on the two commands that write to /nix.
-      - name: install the toolchain with easysetup
-        env:
-          TOOLS: ${{ matrix.tools }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          tag=$(curl -fsSI --retry 3 \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            https://github.com/easydev-org/easysetup-cli/releases/latest \
-            | grep -i '^location:' | sed 's|.*/tag/||' | tr -d '\r\n')
-          echo "easysetup $tag"
-          base="https://github.com/easydev-org/easysetup-cli/releases/download/$tag"
-          curl -fsSL --retry 5 --retry-all-errors \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -o /tmp/easysetup "$base/easysetup-linux-amd64"
-          curl -fsSL --retry 5 --retry-all-errors \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -o /tmp/easysetup.sha256 "$base/easysetup-linux-amd64.sha256"
-          # Strip whitespace and keep the digest: the published file is a bare
-          # hash plus newline, but this accepts the 'hash  name' form too.
-          want=$(tr -d '[:space:]' < /tmp/easysetup.sha256 | cut -c1-64)
-          [ -n "$want" ] || { echo '::error::published checksum is empty'; exit 1; }
-          chmod +x /tmp/easysetup
-          /tmp/easysetup checksum --expect "$want" /tmp/easysetup
-          sudo /tmp/easysetup prepare
-          sudo /tmp/easysetup install $TOOLS
-          # Expose the toolchain the way the action does: env.sh plus PATH.
-          sudo /tmp/easysetup env /opt/setup/env.sh
-          sudo chmod 755 /opt/setup/env.sh
-          # shellcheck disable=SC2013
-          for d in /nix/setup-root-*; do
-            [ -f "$d" ] || continue
-            dir=$(cut -d'|' -f1,2 "$d" | tr '|' '/')
-            echo "$dir" >> "$GITHUB_PATH"
-          done
-          echo "EASYSETUP_ENV=/opt/setup/env.sh" >> "$GITHUB_ENV"
+      # The last one was NOT a privilege problem, which is what it looked like.
+      # Unprivileged install of java+maven, conda, elixir+erlang and python+pip
+      # now returns 0 and the resulting tools run: openjdk 25.0.4.1, Maven
+      # 3.9.16, conda 26.7.1, Python 3.13.16, pip 26.1.2.
+      - uses: easydev-org/easysetup@main
+        with:
+          tools: ${{ matrix.tools }}
 
       # Nothing here installs a language. Everything a BUILD needs beyond the
       # toolchain - git, zip, a C toolchain for native extensions, jq for the
