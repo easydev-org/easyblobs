@@ -31,8 +31,23 @@ set -eu
 : "${EASYBLOBS_BASE:?EASYBLOBS_BASE not set}"
 
 BASE="${EASYBLOBS_BASE%/}"
+# The module cache is written read-only on purpose (Go makes it immutable so a
+# build cannot be poisoned mid-resolve), so a plain `rm -rf` fails:
+#   rm: cannot remove '.../pkg/mod/.../tables.go': Permission denied
+# chmod first, then remove - and never let the cleanup mask the real result.
 WORK=$(mktemp -d)
-trap 'rm -rf "$WORK"' EXIT
+cleanup() {
+  rc=$?
+  if [ -d "$WORK" ]; then
+    chmod -R u+w "$WORK" 2>/dev/null || true
+    rm -rf "$WORK" 2>/dev/null || true
+  fi
+  # Report where it stopped. `set -e` exits on the first failure and the trap
+  # then runs; without this the log ends with the cleanup and the actual failing
+  # command is invisible.
+  [ "$rc" = 0 ] || echo "go: exited with status $rc during: ${LAST_CMD:-<unknown>}" >&2
+}
+trap cleanup EXIT
 cd "$WORK"
 
 fail() { echo "go: FAIL: $*" >&2; exit 1; }
@@ -73,7 +88,7 @@ cd "$WORK"
 
 echo "== go get a dependency tree and run it =="
 mkdir -p d2 && cd d2
-go mod init e2e/d2 >/dev/null 2>&1
+go mod init e2e/d2 >/dev/null 2>&1 || fail "go mod init e2e/d2"
 go get rsc.io/quote@v1.5.2 >/dev/null 2>&1 || fail "go get rsc.io/quote"
 printf '%s\n' 'package main' '' 'import (' '    "fmt"' '    "rsc.io/quote"' ')' \
   '' 'func main() { fmt.Println(quote.Hello()) }' > main.go
@@ -95,15 +110,17 @@ VER="v1.0.0"
 SRC="$WORK/mod"
 mkdir -p "$SRC"
 cd "$SRC"
-printf '%s\n' 'module example.com/easyblobs-e2e/hello' '' 'go 1.21' > go.mod
-printf '%s\n' 'package hello' '' 'func Greet() string { return "ez hello" }' > hello.go
+printf '%s\n' 'module example.com/easyblobs-e2e/hello' '' 'go 1.21' > go.mod ||
+  fail "write go.mod"
+printf '%s\n' 'package hello' '' 'func Greet() string { return "ez hello" }' > hello.go ||
+  fail "write hello.go"
 
 echo "== build the .zip and upload =="
 # The proxy zip layout is fixed: <module>@<version>/<file> at the root of the
 # archive, and the version must be a valid semver tag.
 STAGE="$WORK/stage"
 mkdir -p "$STAGE/$MOD@$VER"
-cp go.mod hello.go "$STAGE/$MOD@$VER/"
+cp go.mod hello.go "$STAGE/$MOD@$VER/" || fail "stage the module files"
 ( cd "$STAGE" && zip -q -r "$WORK/mod.zip" "$MOD@$VER" ) || fail "zip the module"
 
 code=$(curl -sS -o /tmp/up.out -w "%{http_code}" -X PUT \
@@ -120,7 +137,7 @@ curl -fsS "$BASE/$MOD/@v/$VER.zip" >/dev/null || fail ".zip"
 echo "== a consumer resolves it back =="
 CONS="$WORK/cons"
 mkdir -p "$CONS" && cd "$CONS"
-go mod init e2e/cons >/dev/null 2>&1
+go mod init e2e/cons >/dev/null 2>&1 || fail "go mod init for the consumer"
 go get "$MOD@$VER" >/dev/null 2>&1 || {
   echo "go: a consumer cannot get the uploaded module:" >&2
   go get -x "$MOD@$VER" 2>&1 | tail -10 >&2

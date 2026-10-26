@@ -99,7 +99,19 @@ TGZ="$WORK/$CH-$VER.tgz"
 [ -s "$TGZ" ] || fail "helm package produced no .tgz"
 
 echo "== helm push =="
-helm push "$TGZ" "$BASE" >/dev/null 2>&1 || fail "helm push"
+# `helm push` only speaks OCI (oci://...) - it cannot upload to a chartmuseum
+# style HTTP repository at all. This adapter exposes the chartmuseum API instead:
+#   POST <base>/api/charts  (multipart chart=@file)
+# So the upload is that POST, which is what a chartmuseum client does. Saying
+# "helm push" here would be testing a command that does not exist for this shape.
+code=$(curl -sS -o /tmp/helm-up.out -w '%{http_code}' -X POST \
+  -F "chart=@$TGZ" "$BASE/api/charts")
+case "$code" in
+  200|201|202) echo "   uploaded (HTTP $code)" ;;
+  *) echo "helm: the chartmuseum upload failed:" >&2
+     cat /tmp/helm-up.out >&2 || true
+     fail "POST /api/charts -> $code" ;;
+esac
 
 echo "== the index lists it =="
 curl -fsS "$BASE/index.yaml" | grep -q "$CH" ||

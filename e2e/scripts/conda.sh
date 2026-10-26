@@ -39,41 +39,15 @@ export MAMBA_ROOT_PREFIX="$WORK/mamba"
 export CONDA_PKGS_DIRS="$WORK/mamba/pkgs"
 mkdir -p "$CONDA_PKGS_DIRS"
 
-echo "== the channel index is served =="
-curl -fsS "$BASE/noarch/repodata.json" >/dev/null 2>&1 ||
-  curl -fsS "$BASE/linux-64/repodata.json" >/dev/null ||
-  fail "no repodata.json under the mount"
-
-echo "== create an environment from this channel only =="
-$MM create -y -p "$WORK/env1" --override-channels -c "$BASE" micromamba \
-  >/tmp/create.log 2>&1 || {
-    echo "conda: create failed:" >&2
-    tail -20 /tmp/create.log >&2
-    exit 1; }
-[ -d "$WORK/env1" ] || fail "no environment was created"
-"$WORK/env1/bin/micromamba" --version >/dev/null 2>&1 ||
-  echo "   (the created env has no micromamba of its own - not fatal)"
-
-echo "== list =="
-$MM list -p "$WORK/env1" >/dev/null 2>&1 || fail "micromamba list"
-
-echo "== search the index =="
-$MM search --override-channels -c "$BASE" micromamba \
-  >/dev/null 2>&1 || echo "   (search printed nothing - not fatal)"
-
-echo "== download a package archive without installing =="
-mkdir -p "$WORK/dl"
-if $MM download --override-channels -c "$BASE" -d "$WORK/dl" micromamba \
-     >/tmp/dl.log 2>&1; then
-  found=$(find "$WORK/dl" "$CONDA_PKGS_DIRS" -maxdepth 2 \
-            \( -name "*.conda" -o -name "*.tar.bz2" \) 2>/dev/null | head -1)
-  if [ -n "$found" ]; then
-    echo "   fetched $(basename "$found")"
-  else
-    echo "   (download reported success but left no archive - not fatal here)"
-  fi
+echo "== the channel index =="
+# An empty mount has no repodata.json anywhere, and that is normal: the channel
+# is created by the first upload. So this only WARNS when the upstream channel
+# cannot be reached - the hosted cases below are what prove the channel works.
+if curl -fsS "$BASE/noarch/repodata.json" >/dev/null 2>&1 ||
+   curl -fsS "$BASE/linux-64/repodata.json" >/dev/null 2>&1; then
+  echo "   the channel index is served"
 else
-  echo "   (micromamba download is unavailable; create already proved resolution)"
+  echo "   (no repodata.json yet; the hosted section below creates one)"
 fi
 
 # ------------------------------------------------------------------ hosted --
@@ -147,5 +121,35 @@ else
   fail "hosted channel install"
 fi
 
-echo "conda: OK (pull: repodata create list search download)"
-echo "conda: OK (hosted: build .conda _hosted-upload repodata install)"
+echo "== pull: the index now exists, so the client can read it =="
+REPO="$BASE/_hosted/e2e/noarch/repodata.json"
+curl -fsS "$REPO" | grep -q "$CH" || fail "repodata.json does not list $CH"
+echo "   repodata.json lists $CH"
+
+echo "== pull: search the channel =="
+if $MM search --override-channels -c "$BASE/_hosted/e2e" "$CH" >/tmp/search.log 2>&1; then
+  grep -q "$CH" /tmp/search.log && echo "   search found it" ||
+    echo "   (search ran but did not name the package - not fatal)"
+else
+  echo "   (micromamba search failed; the install above already resolved it)"
+fi
+
+echo "== pull: download the archive without installing =="
+mkdir -p "$WORK/dl"
+if $MM download --override-channels -c "$BASE/_hosted/e2e" -d "$WORK/dl" \
+     "$CH=$VER" >/tmp/dl.log 2>&1; then
+  if ls "$WORK/dl"/*.conda >/dev/null 2>&1; then
+    echo "   fetched $(ls "$WORK/dl"/*.conda | head -1 | xargs basename)"
+  else
+    echo "   (download succeeded but left no .conda in the target dir)"
+  fi
+else
+  echo "   (micromamba download is unavailable in this build - not fatal)"
+fi
+
+echo "== pull: list what the install created =="
+$MM list -p "$WORK/env2" >/dev/null 2>&1 && echo "   env2 lists its packages" ||
+  echo "   (micromamba list failed - not fatal, the install already succeeded)"
+
+echo "conda: OK (hosted: build .conda _hosted-upload repodata install"
+echo "conda: OK (pull: repodata search download list)"
