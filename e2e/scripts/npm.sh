@@ -133,14 +133,23 @@ INST=$(mktemp -d)
 rm -rf "$INST"
 
 echo "== deprecate =="
+# npm 11 does NOT PUT /<pkg>/deprecate. It reads the packument with ?write=true
+# and PUTs the whole document back to /<pkg>, with "deprecated" on each version:
+#
+#   npm http fetch GET 200 /artifacts/npm/@scope%2fname?write=true
+#   npm http fetch PUT 201 /artifacts/npm/@scope%2fname
+#
+# The adapter handles that form, and the /deprecate endpoint as well for older
+# clients. So assert on the EFFECT. `npm view <pkg> deprecated` is ambiguous
+# once a package has several versions and printed nothing even when the flag
+# had landed, which is what made this look like a server bug.
 npm deprecate "$NAME@1.0.0" "use 2.0.0" || fail "deprecate"
-if npm view "$NAME" deprecated 2>/dev/null | grep -qi "use 2.0.0"; then
-  echo "   the flag is in the packument"
-else
-  echo "   WARNING: npm deprecate exited 0 but the flag is absent from the" >&2
-  echo "   packument - probe-deprecate reports whether the write or the read" >&2
-  echo "   is at fault" >&2
-fi
+DEP=$(curl -sS "$REG$NAME" | tr -d '\n' |
+  sed -n 's/.*"1\.0\.0"[^}]*"deprecated":"\([^"]*\)".*/\1/p')
+case "$DEP" in
+  *"use 2.0.0"*) echo "   the flag is on 1.0.0" ;;
+  *) fail "deprecate exited 0 but versions[1.0.0].deprecated is '$DEP'" ;;
+esac
 
 echo "== unpublish 1.0.0 =="
 npm unpublish "$NAME@1.0.0" --force || fail "unpublish"
