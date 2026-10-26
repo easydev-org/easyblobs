@@ -43,7 +43,11 @@ echo "== the repository root answers =="
 curl -fsS "$BASE/archetype-catalog.xml" >/dev/null || fail "archetype-catalog.xml"
 
 echo "== resolve: a plain jar =="
-M dependency:get -Dartifact=org.slf4j:slf4j-api:2.0.9 >/dev/null || fail "resolve slf4j-api"
+if ! out=$(M dependency:get -Dartifact=org.slf4j:slf4j-api:2.0.9 2>&1); then
+  echo "maven: resolve slf4j-api failed:" >&2
+  echo "$out" | tail -25 >&2
+  fail "resolve slf4j-api"
+fi
 test -f "$M2/org/slf4j/slf4j-api/2.0.9/slf4j-api-2.0.9.jar" || fail "the jar did not land"
 
 echo "== resolve: transitive dependencies =="

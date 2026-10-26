@@ -86,11 +86,11 @@ printf '%s\n' 'def greet():' '    return "ez hello"' \
 #   failed to open .../info/files: No such file or directory
 # It lists every payload path, one per line.
 printf '%s\n' 'site-packages/easyblobs_e2e.py' > "$BLD/info/files"
-# paths.json is the modern equivalent and is what libmamba prefers; write it too
-# so the package works on both code paths.
-printf '%s\n' '{"paths": [{"_path": "site-packages/easyblobs_e2e.py",' \
-  '            "path_type": "hardlink", "file_mode": "text", "size_in_bytes": 43}]}' \
-  > "$BLD/info/paths.json"
+# NO paths.json. I added one and libmamba rejected it:
+#   Invalid package cache, could not read 'paths.json' ...
+#   Package version (paths.json file) too new for mamba.
+# paths.json has a versioned schema; a hand-written one is worse than none, and
+# info/files alone is what a legacy .tar.bz2 package is supposed to carry.
 ( cd "$BLD" && tar -cjf "$WORK/$CH-$VER-py_0.tar.bz2" info site-packages ) ||
   fail "build the .tar.bz2"
 [ -s "$WORK/$CH-$VER-py_0.tar.bz2" ] || fail "no package archive produced"
