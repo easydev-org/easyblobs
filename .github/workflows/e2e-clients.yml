@@ -968,7 +968,7 @@ jobs:
           name: easyblobs-log-hosted-${{ matrix.protocol }}
           path: /tmp/easyblobs.log
           if-no-files-found: ignore
-  probe-deprecate:
+  probe-dep2:
     needs: [server]
     runs-on: ubuntu-latest
     steps:
@@ -981,35 +981,36 @@ jobs:
           set -eu
           chmod +x /tmp/bin/easyblobs-bin
           mkdir -p /tmp/eb-data
-          EASYBLOGS_DEBUG=1 /tmp/bin/easyblobs-bin --listen 127.0.0.1:8080 \
+          EASYBLOBS_DEBUG=1 /tmp/bin/easyblobs-bin --listen 127.0.0.1:8080 \
             --data /tmp/eb-data --self-base http://127.0.0.1:8080 \
             >/tmp/easyblobs.log 2>&1 &
           i=0
           until curl -fsS --noproxy '*' http://127.0.0.1:8080/healthz >/dev/null 2>&1; do
             i=$((i+1)); [ $i -gt 120 ] && { cat /tmp/easyblobs.log; exit 1; }; sleep 0.5
           done
-      - name: publish, then deprecate by hand
+      - name: record what the CLI sends for deprecate
         run: |
           set -eu
           B=http://127.0.0.1:8080/artifacts/npm
           D=$(mktemp -d); cd "$D"
-          printf '{"name":"@probe/dep","version":"1.0.0","main":"i.js","files":["i.js"],"license":"Apache-2.0"}' > package.json
+          printf '{"name":"@probe2/x","version":"1.0.0","main":"i.js","files":["i.js"],"license":"Apache-2.0"}' > package.json
           printf 'module.exports=1;\n' > i.js
-          T=$(mktemp); ( tar -czf "$T" package.json i.js )
-          EMB=$(base64 -w0 < "$T")
-          printf '{"_attachments":{"dep-1.0.0.tgz":{"data":"%s"}},"name":"@probe/dep","versions":{"1.0.0":{"name":"@probe/dep","version":"1.0.0","dist":{}}}}' "$EMB" > /tmp/pub.json
-          echo "PUT publish: $(curl -sS -o /dev/null -w '%{http_code}' -X PUT "$B/@probe%2Fdep" --data-binary @/tmp/pub.json)"
-          echo '--- packument before ---'
-          curl -sS "$B/@probe%2Fdep" | head -c 400; echo
-          echo '--- PUT deprecate (handler shape) ---'
-          echo "code=$(curl -sS -o /tmp/dep.out -w '%{http_code}' -X PUT "$B/@probe%2Fdep/deprecate" --data-binary '{"versions":{"1.0.0":"use 2.x"}}')"
-          cat /tmp/dep.out; echo
-          echo '--- packument after ---'
-          curl -sS "$B/@probe%2Fdep" > /tmp/after.json
-          python3 -c 'import json;d=json.load(open("/tmp/after.json"));vs=d.get("versions") or {};print("versions:",list(vs));[print(" ",v,"deprecated=",repr((vs[v] or {}).get("deprecated"))) for v in vs]'
-          echo '--- server log for the deprecate call ---'
-          grep -i deprecat /tmp/easyblobs.log | tail -5 || true
-
+          REG="$B/"
+          NF=$(printf '%s' "$REG" | sed -e 's|^https\?://||')
+          printf 'registry=%s\n//%s:_authToken=e2e\n' "$REG" "$NF" > .npmrc
+          export NPM_CONFIG_USERCONFIG="$D/.npmrc"
+          npm publish >/dev/null 2>&1 || { echo 'publish failed'; exit 1; }
+          echo '--- baseline: the log lines so far ---'
+          wc -l < /tmp/easyblobs.log
+          echo '--- npm deprecate, with npm debug logging ---'
+          npm deprecate @probe2/x@1.0.0 'obsolete' --loglevel=silly 2>&1 \
+            | grep -iE 'http fetch|PUT |POST |deprecat' | head -20 || true
+          echo '--- every request the mount saw during deprecate ---'
+          grep -E 'req (PUT|POST|DELETE|PATCH)' /tmp/easyblobs.log | tail -10 || echo '  (no write request at all)'
+          echo '--- packument now ---'
+          curl -sS "$B/@probe2%2Fx" | python3 -c 'import json,sys;d=json.load(sys.stdin);vs=d.get("versions") or {};[print(" ",v,"deprecated=",repr((vs[v] or {}).get("deprecated"))) for v in vs]'
+          echo '--- npm config: what registry does it think this is ---'
+          npm config get registry
 
   verify-easysetup:
     needs: [server]
