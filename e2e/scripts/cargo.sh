@@ -46,11 +46,13 @@ registry = "sparse+$BASE/"
 [registries.mount]
 index = "sparse+$BASE/"
 
-# The mount answers plain HTTP; cargo refuses a non-HTTPS registry unless the
-# token is scoped to it, and a token is required for publish.
-[registry]
-token = "e2e"
 CONF
+
+# The token has to be filed per registry, either with `cargo login --registry
+# mount` or as CARGO_REGISTRIES_MOUNT_TOKEN. A bare `[registry] token = ...`
+# in config.toml is not read:
+#   error: no token found for `mount`, please run `cargo login --registry mount`
+export CARGO_REGISTRIES_MOUNT_TOKEN=e2e
 
 echo "== the index describes itself =="
 curl -fsS "$BASE/config.json" | grep -q dl || fail "index/config.json has no dl"
@@ -160,10 +162,21 @@ cargo publish --quiet --registry mount --no-verify --allow-dirty 2>&1 | tail -3 
   fail "cargo publish"
 
 echo "== the sparse index lists the version =="
+# Cargo's sparse path scheme, exactly:
+#   1 char   -> 1/<name>
+#   2 chars  -> 2/<name>
+#   3 chars  -> 3/<first>/<name>
+#   otherwise-> <first2>/<next2>/<name>
+#
+# My first version built "<first2>/<last4>", which produced ea/rate for
+# easyblobs-e2e-crate and then reported the index as broken.
 LEN=$(printf '%s' "$CRATE" | wc -c)
-if [ "$LEN" = 1 ]; then P="1/$CRATE"; elif [ "$LEN" = 2 ]; then P="2/$CRATE"
-elif [ "$LEN" = 3 ]; then P="3/${CRATE%"${CRATE#?}"}/$CRATE"
-else P="${CRATE%"${CRATE#??}"}/${CRATE#"${CRATE%????}"}"; fi
+case "$LEN" in
+  1) P="1/$CRATE" ;;
+  2) P="2/$CRATE" ;;
+  3) P="3/$(printf '%s' "$CRATE" | cut -c1)/$CRATE" ;;
+  *) P="$(printf '%s' "$CRATE" | cut -c1-2)/$(printf '%s' "$CRATE" | cut -c3-4)/$CRATE" ;;
+esac
 # Ask the index for the crate the way cargo would, then grep the version.
 ENTRY=$(curl -fsS "$BASE/$P" 2>/dev/null || curl -fsS "$BASE/index/$P" 2>/dev/null || true)
 [ -n "$ENTRY" ] || fail "the sparse entry for $CRATE is not served (tried $P)"

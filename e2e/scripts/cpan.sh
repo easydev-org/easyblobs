@@ -75,5 +75,22 @@ if ! command -v cpanm >/dev/null; then
 fi
 command -v cpanm >/dev/null || { echo "cpan: cpanm still missing after install" >&2; exit 1; }
 
-cpanm --notest --quiet DBI
-perl -MDBI -e 'print "cpan: DBI ", $DBI::VERSION, " loaded\n"'
+# The nix perl's site_perl is inside the read-only store, so cpanm falls back to
+# ~/perl5:
+#   Can't write to /nix/store/...-perl-5.42.3/lib/perl5/site_perl/5.42.3 ...
+#   Installing modules to /home/runner/perl5
+#   Successfully installed DBI-1.656
+# and then the module is invisible because @INC does not include that path.
+# local::lib is the supported way to make it visible:
+#   eval $(perl -I ~/perl5/lib/perl5/ -Mlocal::lib)
+# which is what cpanm itself suggests, so this is the normal local-lib layout and
+# not a workaround for the mirror.
+cpanm --notest --quiet DBI || { echo "cpan: cpanm could not install DBI" >&2; exit 1; }
+
+PERLLIB="$HOME/perl5/lib/perl5"
+if [ -d "$PERLLIB" ]; then
+  PERL5LIB="$PERLLIB${PERL5LIB:+:$PERL5LIB}"
+  export PERL5LIB
+fi
+perl -MDBI -e 'print "cpan: DBI ", $DBI::VERSION, " loaded\n"' ||
+  { echo "cpan: DBI installed but not loadable (PERL5LIB=$PERL5LIB)" >&2; exit 1; }
