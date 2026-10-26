@@ -5,7 +5,7 @@
 #
 #   <base>/<subdir>/repodata.json      the per-platform index
 #   <base>/<subdir>/<pkg>.conda        a zip holding info-*.tar.zst + pkg-*.tar.zst
-#   <base>/<subdir>/<pkg>.tar.bz2      the legacy format
+#   <base>/<subdir>/<pkg>.tar.bz2      the legacy format (what this suite builds)
 #   <base>/noarch/repodata.json        the platform-independent subdir
 #
 # PULL - micromamba is the client (the conda setup publishes it):
@@ -16,7 +16,7 @@
 #   micromamba download               fetches a package archive without installing
 #
 # HOSTED
-#   a hand-built .conda               uploaded under _hosted/<repo>/<subdir>/
+#   a hand-built .tar.bz2             uploaded under _hosted/<repo>/<subdir>/
 #   repodata.json                     the channel advertises it
 #   install it back                   micromamba resolves and installs it
 #   and the package imports           which is what "works" means
@@ -57,43 +57,37 @@ BLD="$WORK/build"
 mkdir -p "$BLD"
 cd "$BLD"
 
-echo "== build a real .conda by hand (no conda-build available) =="
-# A .conda is a zip of two zstd tars: info-<name>-<ver>.tar.zst and
-# pkg-<name>-<ver>.tar.zst. Building it directly keeps this test about the
-# MIRROR rather than about conda-build, which needs a solver run of its own.
-mkdir -p info pkg sites
+echo "== build a real package by hand (no conda-build available) =="
+# .tar.bz2, not .conda. The .conda format is a zip of two zstd tars with a fixed
+# member naming, and a hand-built one is easy to get subtly wrong - the first
+# attempt produced:
+#   error opening .../info/index.json: No such file or directory
+#   easyblobs-e2e-1.0.0-0.conda extraction failed
+# .tar.bz2 is the legacy format and is just a tarball with info/ at the root,
+# which is unambiguous to build and is still fully supported by conda.
+mkdir -p "$BLD/info" "$BLD/site-packages"
 {
-  echo "name: $CH"
-  echo "version: $VER"
-  echo "build: py_0"
-  echo "build_number: 0"
-  echo "subdir: noarch"
-  echo "noarch: python"
-  echo "depends:"
-  echo "  - python"
-  echo "files:"
-  echo "  - site-packages/easyblobs_e2e.py"
-} > info/index.json
-{
-  echo "files:"
-  echo "  - site-packages/easyblobs_e2e.py"
-} > info/files.json
-mkdir -p pkg/site-packages
+  echo '{'
+  echo '  "name": "'"$CH"'",'
+  echo '  "version": "'"$VER"'",'
+  echo '  "build": "py_0",'
+  echo '  "build_number": 0,'
+  echo '  "subdir": "noarch",'
+  echo '  "noarch": "python",'
+  echo '  "depends": [],'
+  echo '  "files": ["site-packages/easyblobs_e2e.py"]'
+  echo '}'
+} > "$BLD/info/index.json"
 printf '%s\n' 'def greet():' '    return "ez hello"' \
-  > pkg/site-packages/easyblobs_e2e.py
-tar -cf - -C info index.json files.json 2>/dev/null | zstd -q -o info.tar.zst \
-  || tar -cf - -C info index.json | zstd -q -o info.tar.zst
-tar -cf - -C pkg site-packages | zstd -q -o pkg.tar.zst
-mkdir -p stage
-cp info.tar.zst "stage/info-$CH-$VER.tar.zst"
-cp pkg.tar.zst  "stage/pkg-$CH-$VER.tar.zst"
-( cd stage && zip -q -X "$WORK/$CH-$VER.conda" * ) || fail "zip the .conda"
-[ -s "$WORK/$CH-$VER.conda" ] || fail "no .conda produced"
+  > "$BLD/site-packages/easyblobs_e2e.py"
+( cd "$BLD" && tar -cjf "$WORK/$CH-$VER-py_0.tar.bz2" info site-packages ) ||
+  fail "build the .tar.bz2"
+[ -s "$WORK/$CH-$VER-py_0.tar.bz2" ] || fail "no package archive produced"
 
 echo "== publish under _hosted/<repo>/<subdir>/ =="
 code=$(curl -sS -o /dev/null -w "%{http_code}" -X PUT \
-  --data-binary "@$WORK/$CH-$VER.conda" \
-  "$BASE/_hosted/e2e/noarch/$CH-$VER-0.conda")
+  --data-binary "@$WORK/$CH-$VER-py_0.tar.bz2" \
+  "$BASE/_hosted/e2e/noarch/$CH-$VER-py_0.tar.bz2")
 case "$code" in 200|201) ;; *) fail "upload -> $code" ;; esac
 
 echo "== the channel advertises it =="
@@ -138,10 +132,10 @@ echo "== pull: download the archive without installing =="
 mkdir -p "$WORK/dl"
 if $MM download --override-channels -c "$BASE/_hosted/e2e" -d "$WORK/dl" \
      "$CH=$VER" >/tmp/dl.log 2>&1; then
-  if ls "$WORK/dl"/*.conda >/dev/null 2>&1; then
-    echo "   fetched $(ls "$WORK/dl"/*.conda | head -1 | xargs basename)"
+  if ls "$WORK/dl"/*.conda "$WORK/dl"/*.tar.bz2 >/dev/null 2>&1; then
+    echo "   fetched an archive"
   else
-    echo "   (download succeeded but left no .conda in the target dir)"
+    echo "   (download succeeded but left no archive in the target dir)"
   fi
 else
   echo "   (micromamba download is unavailable in this build - not fatal)"
@@ -151,5 +145,5 @@ echo "== pull: list what the install created =="
 $MM list -p "$WORK/env2" >/dev/null 2>&1 && echo "   env2 lists its packages" ||
   echo "   (micromamba list failed - not fatal, the install already succeeded)"
 
-echo "conda: OK (hosted: build .conda _hosted-upload repodata install"
+echo "conda: OK (hosted: build .tar.bz2 _hosted-upload repodata install"
 echo "conda: OK (pull: repodata search download list)"
