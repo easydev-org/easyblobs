@@ -41,15 +41,28 @@ X
 if ! out=$(swiftc main.swift -o "$W/app" 2>&1); then
   echo "swift: swiftc failed:" >&2
   echo "$out" | tail -15 >&2
-  libdir=$(dirname "$(readlink -f "$(command -v swiftc)")")/../lib/swift/linux
-  if [ -d "$libdir" ]; then
-    echo "swift: runtime libs present in $libdir:" >&2
-    ls "$libdir" 2>/dev/null | head -5 >&2
-  else
-    echo "swift: NO runtime library directory at $libdir" >&2
-    echo "swift: this is a toolchain packaging gap, not a client or mirror" >&2
-    echo "swift: problem - the compiler is present but libswiftCore is not" >&2
-  fi
+  # Where the compiler lives, and what is actually beside it. A link failure for
+  # -lswiftCore is a broken toolchain, not a broken program, and the two have
+  # different fixes - so say which one this is instead of leaving the linker's
+  # output to be read as a client bug.
+  SWIFTC=$(readlink -f "$(command -v swiftc)")
+  ROOT=$(dirname "$(dirname "$SWIFTC")")
+  echo "swift: swiftc = $SWIFTC" >&2
+  echo "swift: prefix = $ROOT" >&2
+  for d in "$ROOT/lib/swift/linux" "$ROOT/lib/swift" "$ROOT/lib"; do
+    if [ -d "$d" ]; then
+      n=$(ls "$d" 2>/dev/null | wc -l)
+      core=$(ls "$d" 2>/dev/null | grep -c '^libswiftCore' || true)
+      echo "swift: $d -> $n entries, libswiftCore*: $core" >&2
+      [ "$core" = 0 ] && ls "$d" 2>/dev/null | head -8 >&2
+    else
+      echo "swift: $d does not exist" >&2
+    fi
+  done
+  find "$ROOT" -name 'libswiftCore*' 2>/dev/null | head -3 >&2 || true
+  echo "swift: if libswiftCore is nowhere under the prefix, the closure ships the" >&2
+  echo "swift: compiler without its runtime libraries - an easysetup packaging gap," >&2
+  echo "swift: not something this suite or the mirror can fix." >&2
   exit 1
 fi
 "$W/app"
