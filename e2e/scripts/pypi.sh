@@ -32,7 +32,16 @@ cd "$WORK"
 
 fail() { echo "pypi: FAIL: $*" >&2; exit 1; }
 
-pip() { python3 -m pip --disable-pip-version-check --no-cache-dir "$@"; }
+# `pip`, NOT `python3 -m pip`. Under easysetup's nix packaging a Python library
+# is its own derivation and does not write into an existing interpreter's
+# site-packages, so `python3 -m pip` is "No module named pip" for the interpreter
+# on PATH even though `pip` itself works - and it is built for 3.14.
+#
+# That matters here beyond the install: the `--target` dir is on PYTHONPATH for
+# the assertions below, so the interpreter that installs has to be the one that
+# runs them. Both are `pip`'s 3.14 in this image; using `python3 -m pip` would
+# quietly depend on that coincidence.
+pip() { pip --disable-pip-version-check --no-cache-dir "$@"; }
 
 # Install into an isolated target dir, so one case's dependencies cannot make
 # the next case pass by accident.

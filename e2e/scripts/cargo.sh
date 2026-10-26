@@ -111,7 +111,16 @@ printf '%s\n' \
   '    let pid = libc::getpid();' \
   '    println!("libc: {}", pid > 0);' \
   '}' > src/main.rs
-cargo run --quiet 2>/dev/null | grep -q 'libc: true' || fail "libc is not usable"
+#
+# stderr is kept, and the failure prints it: 'cargo run --quiet 2>/dev/null' hid
+# whether this was a compile error or a missing package, which is exactly the
+# distinction that matters.
+if ! out=$(cargo run --quiet 2>&1); then
+  echo "cargo: libc crate failed to build:" >&2
+  echo "$out" | tail -25 >&2
+  fail "libc is not usable"
+fi
+echo "$out" | grep -q 'libc: true' || fail "libc ran but printed: $out"
 cd "$WORK"
 
 # ------------------------------------------------------------------ hosted --

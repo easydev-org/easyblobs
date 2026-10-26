@@ -67,6 +67,22 @@ echo "luarocks: mirror directory:"; ls -la "$HOME/rocktree/mirror" | head -6
 # exists, and fall back to $HOME otherwise.
 LRCONF_DIR="${GITHUB_WORKSPACE:-$HOME}/.luarocks"
 mkdir -p "$LRCONF_DIR"
+# LUA_INCDIR: the rock is a C extension and needs lua.h. The old actions put the
+# headers in /usr/include/lua5.4; the easysetup closure has them inside its own
+# store path, so ask lua where it is instead of guessing a system prefix.
+if [ -z "${LUA_INCDIR:-}" ]; then
+  LUABIN=$(command -v lua || command -v lua5.4 || command -v lua5.5 || true)
+  if [ -n "$LUABIN" ]; then
+    # <store>/bin/lua -> <store>/include
+    LUA_INCDIR="$(cd "$(dirname "$(readlink -f "$LUABIN")")/../include" 2>/dev/null && pwd)" || true
+  fi
+fi
+if [ -z "${LUA_INCDIR:-}" ] || [ ! -f "$LUA_INCDIR/lua.h" ]; then
+  for cand in /usr/include/lua5.4 /usr/include/lua5.3 /usr/include; do
+    [ -f "$cand/lua.h" ] && LUA_INCDIR="$cand" && break
+  done
+fi
+echo "luarocks: LUA_INCDIR=${LUA_INCDIR:-<not found>}"
 # DOUBLE quotes: this is a Lua string that must contain the RESOLVED path. With
 # single quotes the shell wrote the literal "$HOME/rocktree/mirror", so the
 # config pointed at a directory that does not exist and luarocks found nothing:
@@ -78,10 +94,14 @@ printf '%s\n' \
 export LUAROCKS_CONFIG="$LRCONF_DIR/config-5.4.lua"
 echo "luarocks config:"
 cat "$LRCONF_DIR/config-5.4.lua"
-if ! luarocks --lua-version=5.4 \
-      install luafilesystem --tree=/tmp/lr-tree 2>&1 | tail -25; then
-  echo "luarocks: install failed (see output above)"
+# No `if ! ... | tail`: `!` and `if` both look at the LAST command of the pipe,
+# which is tail, so a failed install read as success. Capture and inspect.
+if ! out=$(luarocks --lua-version=5.4 install luafilesystem --tree=/tmp/lr-tree 2>&1); then
+  echo "luarocks: install failed:" >&2
+  echo "$out" | tail -25 >&2
+  exit 1
 fi
+echo "$out" | tail -5
 [ -n "$(find /tmp/lr-tree -name 'luafilesystem*.so' 2>/dev/null)" ] || \
   [ -n "$(find /tmp/lr-tree -iname '*luafilesystem*' 2>/dev/null)" ] || {
     echo "luarocks: luafilesystem not installed"; exit 1; }

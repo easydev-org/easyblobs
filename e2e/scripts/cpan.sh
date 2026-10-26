@@ -37,13 +37,33 @@ export PERL_CPANM_OPT="--mirror $EASYBLOBS_BASE --mirror-only"
 # its own build tool, which is what a real air-gapped user would do.
 if ! command -v cpanm >/dev/null; then
   echo "cpan: cpanm is absent; installing it from the mount"
-  perl -MCPAN -e 'CPAN::Shell->install("App::cpanminus")' >/tmp/cpanm-install.log 2>&1 || {
-    echo "cpan: could not install App::cpanminus through the mirror" >&2
-    tail -20 /tmp/cpanm-install.log >&2
-    exit 1; }
-  for d in "$HOME/.local/bin" /tmp/cpanhome/bin /usr/local/bin; do
+  # Two ways in, in order of preference:
+  #   1. CPAN::Shell, which uses the MyConfig.pm written above (the mirror).
+  #   2. fetch the cpanm script from the mirror directly and run it.
+  # Version 1 needs a working CPAN config; on a bare nix perl it is silent when
+  # it fails, which is why the log is kept and printed.
+  if ! perl -MCPAN -e 'CPAN::Shell->install("App::cpanminus")' >/tmp/cpanm-install.log 2>&1; then
+    echo "cpan: CPAN::Shell install failed, falling back to the script:" >&2
+    tail -12 /tmp/cpanm-install.log >&2
+  fi
+  # Any of these locations is where a CPAN install would have put it.
+  for d in "$HOME/.local/bin" /tmp/cpanhome/bin /usr/local/bin "$HOME/perl5/bin"; do
     [ -x "$d/cpanm" ] && PATH="$d:$PATH" && export PATH && break
   done
+  if ! command -v cpanm >/dev/null; then
+    # Last resort: cpanm is a single Perl script; the mirror serves it.
+    echo "cpan: fetching the cpanm script from the mount" >&2
+    mkdir -p "$HOME/.local/bin"
+    if curl -fsS -o "$HOME/.local/bin/cpanm" "$EASYBLOBS_BASE/authors/id/M/MI/MIYAGAWA/App-cpanminus-1.7047.tar.gz" 2>/dev/null; then
+      # That is the tarball, not the script; unpack and use its bin/cpanm.
+      ( cd /tmp && tar -xzf "$HOME/.local/bin/cpanm" 2>/dev/null ) || true
+      found=$(find /tmp/App-cpanminus-* -name cpanm -type f 2>/dev/null | head -1)
+      [ -n "$found" ] && cp "$found" "$HOME/.local/bin/cpanm" && chmod +x "$HOME/.local/bin/cpanm"
+    fi
+    if [ -x "$HOME/.local/bin/cpanm" ]; then
+      PATH="$HOME/.local/bin:$PATH"; export PATH
+    fi
+  fi
 fi
 command -v cpanm >/dev/null || { echo "cpan: cpanm still missing after install" >&2; exit 1; }
 

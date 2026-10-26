@@ -33,5 +33,23 @@ let d = ["ok": true]
 let j = try! JSONSerialization.data(withJSONObject: d)
 print("swift + foundation: " + String(data: j, encoding: .utf8)!)
 X
-swiftc main.swift -o "$W/app"
+# swiftc needs the Swift RUNTIME libraries, not just the compiler. Report which
+# of the two is missing instead of letting the linker's message stand alone:
+#   error: link command failed
+#   cannot find -lswiftCore
+# is a broken toolchain, not a broken program, and the fix is different.
+if ! out=$(swiftc main.swift -o "$W/app" 2>&1); then
+  echo "swift: swiftc failed:" >&2
+  echo "$out" | tail -15 >&2
+  libdir=$(dirname "$(readlink -f "$(command -v swiftc)")")/../lib/swift/linux
+  if [ -d "$libdir" ]; then
+    echo "swift: runtime libs present in $libdir:" >&2
+    ls "$libdir" 2>/dev/null | head -5 >&2
+  else
+    echo "swift: NO runtime library directory at $libdir" >&2
+    echo "swift: this is a toolchain packaging gap, not a client or mirror" >&2
+    echo "swift: problem - the compiler is present but libswiftCore is not" >&2
+  fi
+  exit 1
+fi
 "$W/app"
