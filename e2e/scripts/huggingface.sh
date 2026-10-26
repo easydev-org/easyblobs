@@ -4,15 +4,21 @@
 set -e
 : "${EASYBLOBS_BASE:?EASYBLOBS_BASE not set}"
 export HF_ENDPOINT="$EASYBLOBS_BASE"
-# `pip` may be a separate setup from the interpreter it was built for, so it can
-# exist without belonging to the python3 on PATH. Ask the interpreter for its own
-# pip, and let the error through - `--quiet ... >/dev/null 2>&1` turned a real
-# failure into a silent one.
-python3 -m pip install --no-cache-dir --quiet huggingface_hub ||
-  python3 -m pip install --no-cache-dir huggingface_hub
+# The easysetup `pip` setup carries ITS OWN interpreter (3.13) and does not put
+# pip into the `python` setup's 3.14, so `python3 -m pip` is "No module named
+# pip". Pick the interpreter that actually has pip rather than assuming.
+PY=""
+for cand in python3 python3.13 python; do
+  command -v "$cand" >/dev/null 2>&1 || continue
+  if "$cand" -c 'import pip' >/dev/null 2>&1; then PY="$cand"; break; fi
+done
+[ -n "$PY" ] || { echo "huggingface: no interpreter with pip on PATH" >&2; exit 1; }
+echo "huggingface: using $PY ($($PY --version 2>&1))"
+"$PY" -m pip install --no-cache-dir --quiet huggingface_hub ||
+  "$PY" -m pip install --no-cache-dir huggingface_hub
 # Run assertion: fetch the file and parse it as JSON.
-# python3, not python: the setupless interpreter ships python3 and nothing else.
-python3 - <<'PY'
+# Same interpreter as above: it is the one that has the package.
+"$PY" - <<'PY'
 import json, huggingface_hub as h
 p = h.hf_hub_download('bert-base-uncased', 'config.json')
 cfg = json.load(open(p))
