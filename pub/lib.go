@@ -56,6 +56,28 @@ func (s *State) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(path, "api/packages/") && strings.HasSuffix(path, "/advisories"):
 		easyblobkit.JSON(w, http.StatusOK, map[string]any{"advisories": []any{}, "advisoriesUpdated": "1970-01-01T00:00:00Z"})
 	case strings.HasPrefix(path, "api/packages/") && strings.Contains(path, "/versions/"):
+		// DELETE /api/packages/<name>/versions/<ver> removes ONE version.
+		//
+		// This fell through to versionArchive, whose GET path serves the archive
+		// and which has no DELETE branch at all - so a delete answered 200 and
+		// changed nothing, and the version stayed advertised. The narrower
+		// ".../versions/" case has to handle it before the archive does.
+		if r.Method == http.MethodDelete {
+			rest := strings.TrimPrefix(path, "api/packages/")
+			parts := strings.Split(rest, "/")
+			if len(parts) < 3 || parts[0] == "" || parts[2] == "" {
+				easyblobkit.Error(w, http.StatusNotFound, "not found")
+				return
+			}
+			name := parts[0]
+			version := strings.TrimSuffix(parts[2], ".tar.gz")
+			if !easyblobkit.AuthorizeWriteScoped(w, r, s.Auth, s.Registry, "pub") {
+				return
+			}
+			removeVersion(s.Registry, name, version, r.Context())
+			easyblobkit.JSON(w, http.StatusOK, map[string]any{"ok": true})
+			return
+		}
 		s.versionArchive(w, r, path)
 	case strings.HasPrefix(path, "api/archives/"):
 		// Dart's `pub` downloads <archive_url> = {host}/api/archives/{name}-{version}.tar.gz.
