@@ -1,22 +1,39 @@
 # ci-matrix.tsv — every REAL e2e suite, and how its client is provided.
 #
-# Columns: protocol <TAB> runner <TAB> why
+# Columns: protocol <TAB> runner <TAB> direction <TAB> why <TAB> tools
+#
+#   protocol    the mount path AND the name in the e2e suite
+#   runner      ubuntu-latest, or container:<image> for the distro managers
+#   direction   which promise the SUITE tests - not what the protocol can do:
+#
+#                 hosted      the client PUBLISHES its own artefact and reads
+#                             it back. Used when the adapter has a write path.
+#                 pull-only   the client FETCHES an upstream artefact. This says
+#                             nothing about whether the protocol COULD be
+#                             published to; where the reason is "the adapter has
+#                             no write path", the `why` column says so.
+#                 build-only  reserved for a target that can only be built
+#                             (unused today).
+#
+#   why         the human explanation, including why a protocol is pull-only
+#   tools       the easysetup setups the suite needs (space separated)
+#
+# A protocol was marked pull-only purely because its suite had not been extended
+# yet: conan and pub both have full write paths (AuthorizeWriteScoped, and conan
+# advertises upload_zip in its capabilities). The direction column describes the
+# SUITE, not the product - the same mistake as reading Kind: Mirror as "cannot
+# be written to".
 #
 # runner is one of:
 #
-#   ubuntu-latest   the client is installed with a GitHub Action (or is already
-#                   on the runner). ONE job per protocol, so the install steps
-#                   are `if:`-guarded and only the needed toolchain is set up.
-#                   This is the default and covers every application-level
-#                   client.
+#   ubuntu-latest   the client comes from easysetup. ONE job per protocol.
 #
 #   container:<image>
 #                   ONLY for the distro package managers. `apk` is Alpine's
-#                   package manager and does not exist on Ubuntu; `apt`/`dnf`
-#                   on Ubuntu would test THIS image's package handling against
-#                   a foreign distro's repository, which is the wrong subject.
-#                   These three genuinely require the distro userland they are
-#                   testing, so they keep a job container.
+#                   package manager and does not exist on Ubuntu; `apt`/`dnf` on
+#                   Ubuntu would test THIS image's package handling against a
+#                   foreign distro's repository, which is the wrong subject.
+#                   These three genuinely require the userland they test.
 
 # --- application-level clients: installed with actions on ubuntu-latest ---
 
@@ -25,7 +42,7 @@ jsrnpm	ubuntu-latest	pull-only	npm via actions/setup-node (JSR's npm-compatible 
 jsr	ubuntu-latest	hosted	deno via denoland/setup-deno	deno
 pypi	ubuntu-latest	hosted	pip via actions/setup-python	python pip
 huggingface	ubuntu-latest	pull-only	pip + huggingface_hub (installed by the suite)	python pip
-conan	ubuntu-latest	pull-only	conan via pip (installed in the job)	python conan
+conan	ubuntu-latest	hosted	conan via pip (installed in the job)	python conan
 cargo	ubuntu-latest	hosted	cargo via dtolnay/rust-toolchain	rust cargo
 go	ubuntu-latest	hosted	go via actions/setup-go	go
 maven	ubuntu-latest	hosted	mvn via actions/setup-java	java maven
@@ -40,7 +57,7 @@ helm	ubuntu-latest	hosted	helm via azure/setup-helm	helm
 rubygems	ubuntu-latest	hosted	gem via ruby/setup-ruby	ruby
 composer	ubuntu-latest	hosted	composer + php via ramsey/composer-install / setup-php	php composer
 hex	ubuntu-latest	hosted	mix via erlef/setup-beam	elixir erlang
-pub	ubuntu-latest	pull-only	dart via dart-lang/setup-dart	dart
+pub	ubuntu-latest	hosted	dart via dart-lang/setup-dart	dart
 juliapkg	ubuntu-latest	hosted	julia via julia-actions/setup-julia	julia
 hackage	ubuntu-latest	pull-only	cabal via haskell-actions/setup	ghc cabal
 stackage	ubuntu-latest	pull-only	cabal via haskell-actions/setup	ghc cabal
@@ -64,3 +81,4 @@ rpm	container:fedora:41	pull-only	dnf tests THIS distro's repomd metadata
 # --- protocols whose client is plain HTTP by nature ---
 netcache	ubuntu-latest	pull-only	curl IS the client (raw HTTP cache semantics)	
 oci	ubuntu-latest	pull-only	wget speaks the OCI /v2 protocol (no docker daemon needed)	
+
