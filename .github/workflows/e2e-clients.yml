@@ -342,6 +342,7 @@ jobs:
       # Unprivileged install of java+maven, conda, elixir+erlang and python+pip
       # now returns 0 and the resulting tools run: openjdk 25.0.4.1, Maven
       # 3.9.16, conda 26.7.1, Python 3.13.16, pip 26.1.2.
+      - uses: easydev-org/easysetup@main
         with:
           tools: ${{ matrix.tools }}
 
