@@ -968,6 +968,65 @@ jobs:
           name: easyblobs-log-hosted-${{ matrix.protocol }}
           path: /tmp/easyblobs.log
           if-no-files-found: ignore
+  probe-nosudo2:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The setups that used to fail, plus the lightest one as a control.
+        tools:
+          - "java maven"
+          - "conda"
+          - "elixir erlang"
+          - "python pip"
+          - "go"
+    steps:
+      - name: fetch the easysetup binary
+        run: |
+          set -eu
+          tag=$(curl -fsSI --retry 3 \
+            https://github.com/easydev-org/easysetup-cli/releases/latest \
+            | grep -i '^location:' | sed 's|.*/tag/||' | tr -d '\r\n')
+          echo "easysetup tag: $tag"
+          base="https://github.com/easydev-org/easysetup-cli/releases/download/$tag"
+          curl -fsSL --retry 5 --retry-all-errors -o /tmp/easysetup "$base/easysetup-linux-amd64"
+          chmod +x /tmp/easysetup
+
+      - name: prepare
+        run: |
+          set -eu
+          /tmp/easysetup prepare
+          ls -ld /nix /nix/store
+
+      - name: install WITHOUT sudo
+        env:
+          TOOLS: ${{ matrix.tools }}
+        run: |
+          set +e
+          /tmp/easysetup install $TOOLS 2>&1 | tail -20
+          echo "INSTALL_RC=$?"
+          echo '--- setup-root files ---'
+          ls /nix/setup-root-* 2>/dev/null || echo 'NONE'
+          echo "--- store size: $(du -sh /nix/store 2>/dev/null | cut -f1) ---"
+
+      - name: can the runner user run a tool from each setup
+        env:
+          TOOLS: ${{ matrix.tools }}
+        run: |
+          set +e
+          for f in /nix/setup-root-*; do
+            [ -f "$f" ] || continue
+            store=$(cut -d'|' -f1 "$f"); dir=$(cut -d'|' -f2 "$f")
+            echo "$(basename "$f"): $store|$dir"
+          done
+          # Run whatever the setup put on PATH.
+          PATH=$(for f in /nix/setup-root-*; do s=$(cut -d'|' -f1 "$f"); d=$(cut -d'|' -f2 "$f"); printf '%s/%s:' "$s" "$d"; done)$PATH
+          export PATH
+          for c in java mvn conda elixir erl python3 pip go; do
+            command -v "$c" >/dev/null 2>&1 && { printf '%-8s ' "$c"; "$c" --version 2>&1 | head -1; }
+          done
+          echo "TOOL_CHECK_DONE"
+
   verify-easysetup:
     needs: [server]
     runs-on: ubuntu-latest
