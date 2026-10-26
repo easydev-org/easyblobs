@@ -57,23 +57,26 @@ func (s *State) publish(w http.ResponseWriter, r *http.Request, name string) {
 	if v, ok := payload["name"].(string); ok && v != "" {
 		pkgName = v
 	}
-	var version string
-	var pkgJSON map[string]any
-	if vs, ok := payload["versions"].(map[string]any); ok {
-		for k, v := range vs {
-			version = k
-			pkgJSON, _ = v.(map[string]any)
-			break
-		}
-	}
-	if version == "" {
+	// The document may carry ONE version (npm publish) or EVERY version (npm
+	// deprecate, dist-tag and anything else that re-PUTs the packument it just
+	// read with ?write=true). Keep them all.
+	//
+	// Keeping one and breaking was a real defect: `npm deprecate @scope/x@1.0.0`
+	// on a package that also had 2.0.0 PUT the whole document, publish() recorded
+	// a single version, and the "deprecated" flag - which lives on the version
+	// being deprecated - was dropped, while the call still answered 201.
+	versions, _ := payload["versions"].(map[string]any)
+	if len(versions) == 0 {
+		// Older clients send a bare version plus dist-tags.
+		version := ""
 		if dt, ok := payload["dist-tags"].(map[string]any); ok {
 			version, _ = dt["latest"].(string)
 		}
-	}
-	if version == "" {
-		easyblobkit.Error(w, http.StatusBadRequest, "cannot determine version")
-		return
+		if version == "" {
+			easyblobkit.Error(w, http.StatusBadRequest, "cannot determine version")
+			return
+		}
+		versions = map[string]any{version: map[string]any{"version": version}}
 	}
 	var tarball []byte
 	if atts, ok := payload["_attachments"].(map[string]any); ok {
@@ -88,8 +91,62 @@ func (s *State) publish(w http.ResponseWriter, r *http.Request, name string) {
 			}
 		}
 	}
-	s.storeVersion(r.Context(), pkgName, version, tarball, pkgJSON, "push")
+	stored := 0
+	for ver, raw := range versions {
+		ver = strings.TrimSpace(ver)
+		if ver == "" {
+			// A document with an empty key is not a version; recording one would
+			// put a nameless entry in the packument (observed as "‹empty›,1.0.0,
+			// 2.0.0" after a deprecate).
+			continue
+		}
+		pkgJSON, _ := raw.(map[string]any)
+		if tarball == nil {
+			// No payload attached: this is a metadata-only update (deprecate,
+			// dist-tag). Apply it to the version that already exists instead of
+			// storing an empty artefact over it.
+			if s.updateVersionMeta(r.Context(), pkgName, ver, pkgJSON) {
+				stored++
+			}
+			continue
+		}
+		s.storeVersion(r.Context(), pkgName, ver, tarball, pkgJSON, "push")
+		stored++
+	}
+	if stored == 0 {
+		easyblobkit.Error(w, http.StatusBadRequest, "no version could be stored")
+		return
+	}
 	easyblobkit.JSON(w, http.StatusCreated, map[string]any{"ok": true})
+}
+
+// updateVersionMeta rewrites an existing version's metadata without touching its
+// artefact, and reports whether a version was there to update.
+//
+// A metadata-only PUT (npm deprecate, npm dist-tag) carries no _attachments, so
+// treating it as a publish would replace a good tarball with nothing. It also
+// carries every version, so an unknown one is not an error - it just is not
+// something this document can create.
+func (s *State) updateVersionMeta(ctx context.Context, name, version string, pkgJSON map[string]any) bool {
+	art, err := s.Registry.Meta.Get(ctx, "npm", name, version)
+	if err != nil {
+		return false
+	}
+	cur := map[string]any{}
+	if len(art.Proprietary) > 0 {
+		_ = json.Unmarshal(art.Proprietary, &cur)
+	}
+	for k, v := range pkgJSON {
+		if k == "dist" {
+			// dist carries the tarball URL and integrity computed for a fresh
+			// upload; the stored artefact decides those here.
+			continue
+		}
+		cur[k] = v
+	}
+	art.Proprietary, _ = json.Marshal(cur)
+	easyblobkit.LogMetaErr("meta put", s.Registry.Meta.Put(ctx, art))
+	return true
 }
 
 func (s *State) storeVersion(ctx context.Context, name, version string, tarball []byte, pkgJSON map[string]any, source string) {
