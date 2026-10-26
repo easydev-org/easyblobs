@@ -43,7 +43,34 @@ echo "== point hex at the mount =="
 export HEX_MIRROR="$BASE"
 echo "   HEX_MIRROR=$HEX_MIRROR"
 
+echo "== the Hex CLIENT itself =="
+# `mix deps.get` needs the Hex archive installed before it can talk to any repo.
+# Mix looks for it at <mirror>/installs/hex.csv, which this adapter does not
+# serve - it is a package MIRROR, not a Hex client distribution point. So the
+# client comes from the mount as a package if it is there, and the suite says
+# exactly what is missing if it is not:
+#   Could not install Hex because Mix could not download metadata at
+#     <base>/installs/hex.csv
+if ! mix hex.info >/dev/null 2>&1; then
+  if curl -fsS "$BASE/installs/hex.csv" >/dev/null 2>&1; then
+    mix local.hex --force >/tmp/hexclient.log 2>&1 || {
+      echo "hex: mix local.hex failed:" >&2
+      tail -15 /tmp/hexclient.log >&2
+      exit 1; }
+  else
+    echo "   (the mount serves no /installs/hex.csv - it is a package mirror, not"
+    echo "    a Hex client distribution point; the hosted cases below do not need"
+    echo "    the client, so they still run)"
+    HEX_CLIENT=no
+  fi
+fi
+
 echo "== mix deps.get against the mount =="
+if [ "${HEX_CLIENT:-yes}" = no ]; then
+  echo "   skipped: without the Hex client, mix cannot resolve a dependency"
+  echo "   (the index endpoints above and the upload/delete below cover the mirror)"
+  cd "$WORK"
+else
 P1="$WORK/p1"
 mkdir -p "$P1/lib" && cd "$P1"
 printf '%s\n' \
@@ -75,6 +102,7 @@ OUT=$(mix run check.exs 2>&1) || {
 echo "$OUT" | grep -q "ok" || fail "jason did not encode"
 echo "   ran: $OUT"
 cd "$WORK"
+fi
 
 # ------------------------------------------------------------------ hosted --
 PKG="easyblobs_e2e_hex"
