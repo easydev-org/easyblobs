@@ -144,10 +144,21 @@ echo "== deprecate =="
 # once a package has several versions and printed nothing even when the flag
 # had landed, which is what made this look like a server bug.
 npm deprecate "$NAME@1.0.0" "use 2.0.0" || fail "deprecate"
-DEP=$(curl -sS "$REG$NAME" | tr -d '\n' |
-  sed -n 's/.*"1\.0\.0"[^}]*"deprecated":"\([^"]*\)".*/\1/p')
+# Parse the JSON properly. A regex over the raw body is fragile in exactly the
+# way it just was: "deprecated" can appear before or after the version key
+# depending on field order, and the first attempt therefore matched nothing and
+# reported a feature that worked as broken.
+DEP=$(curl -sS "$REG$NAME" | node -e '
+let s = ""
+process.stdin.on("data", d => s += d).on("end", () => {
+  try {
+    const p = JSON.parse(s)
+    const v = p && p.versions && p.versions["1.0.0"]
+    process.stdout.write(String((v && v.deprecated) || ""))
+  } catch (e) { process.stdout.write("") }
+})')
 case "$DEP" in
-  *"use 2.0.0"*) echo "   the flag is on 1.0.0" ;;
+  *"use 2.0.0"*) echo "   the flag is on 1.0.0: $DEP" ;;
   *) fail "deprecate exited 0 but versions[1.0.0].deprecated is '$DEP'" ;;
 esac
 
