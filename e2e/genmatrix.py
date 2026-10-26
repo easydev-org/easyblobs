@@ -50,6 +50,10 @@ def rows():
                 f"genmatrix: third column must be 'hosted', 'pull-only' or "
                 f"'build-only', got {hosted!r} for {proto!r}"
             )
+        # Fifth column: the easysetup setups this protocol needs. It lives here
+        # rather than in 25 `if:` guards in the workflow, and the workflow just
+        # passes it through.
+        tools = parts[4].strip() if len(parts) > 4 else ""
         if not proto or not runner:
             raise SystemExit(f"genmatrix: empty protocol or runner: {raw!r}")
         if proto in seen:
@@ -57,7 +61,7 @@ def rows():
         seen.add(proto)
         if only and proto not in only:
             continue
-        yield proto, runner, hosted
+        yield proto, runner, hosted, tools
     if only:
         unknown = only - seen
         if unknown:
@@ -69,22 +73,22 @@ def main():
     app, distro = [], []
     hosted = []
     build_only = []
-    for proto, runner, direction in rows():
+    for proto, runner, direction, tools in rows():
         if runner.startswith("container:"):
             image = runner.split(":", 1)[1].strip()
             if not image:
                 raise SystemExit(f"genmatrix: container row without an image: {proto}")
             distro.append({"protocol": proto, "image": image})
         elif runner == "ubuntu-latest":
-            app.append(proto)
+            app.append({"protocol": proto, "tools": tools})
             # The hosted matrix is the subset that has a fixture to publish with.
             # A protocol in "app" without one still gets a pull job - it just has
             # no hosted job, because there is nothing to publish.
             if direction == "hosted":
-                hosted.append(proto)
+                hosted.append({"protocol": proto, "tools": tools})
             elif direction == "build-only":
                 # Read-only mirror: its fixture is built, nothing is published.
-                build_only.append(proto)
+                build_only.append({"protocol": proto, "tools": tools})
         else:
             raise SystemExit(
                 f"genmatrix: unknown runner {runner!r} for {proto!r} "
@@ -92,12 +96,12 @@ def main():
             )
 
     if mode == "--app":
-        print(json.dumps({"protocol": app}))
+        print(json.dumps({"include": app}))
     elif mode == "--hosted":
-        print(json.dumps({"protocol": hosted}))
+        print(json.dumps({"include": hosted}))
     elif mode == "--build-only":
         # Read-only mirrors: the fixture is built, nothing is published.
-        print(json.dumps({"protocol": build_only}))
+        print(json.dumps({"include": build_only}))
     elif mode == "--distro":
         print(json.dumps({"include": distro}))
     else:
