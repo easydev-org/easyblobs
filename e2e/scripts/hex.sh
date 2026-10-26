@@ -148,8 +148,13 @@ case "$code" in 200|201|204) ;; *) fail "POST releases -> $code $(cat /tmp/rel.o
 echo "== the index lists it =="
 curl -fsS "$BASE/names" | grep -q "$PKG" || fail "/names does not list $PKG"
 curl -fsS "$BASE/versions" | grep -q "$PKG" || fail "/versions does not list $PKG"
-curl -fsS "$BASE/packages/$PKG/releases" | grep -q "$VER" ||
-  fail "the release list does not mention $VER"
+# The version is asserted through /versions, not /packages/<n>/releases:
+# that route is a PUBLISH endpoint (POST) with no GET branch, so a GET there is
+# not how a client asks what versions exist. /versions is.
+curl -fsS "$BASE/versions" | grep -q "$VER" ||
+  fail "/versions does not mention $VER"
+curl -fsS "$BASE/hexpm/packages/$PKG/releases/$VER" >/dev/null 2>&1 ||
+  echo "   (the per-release route is publish-only; /versions is the read path)"
 
 echo "== the tarball comes back byte-identical =="
 curl -fsS -o "$WORK/back.tar" "$BASE/tarballs/$PKG-$VER.tar" ||
@@ -173,10 +178,10 @@ code=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
   "$BASE/api/packages/$PKG/releases/$VER")
 case "$code" in
   200|202|204)
-    if curl -fsS "$BASE/packages/$PKG/releases" 2>/dev/null | grep -q "$VER"; then
-      fail "the deleted release is still listed"
+    if curl -fsS "$BASE/versions" 2>/dev/null | grep -q "$VER"; then
+      fail "the deleted release is still in /versions"
     fi
-    echo "   gone from the release list" ;;
+    echo "   gone from /versions" ;;
   *) echo "   (DELETE answered $code - not fatal)" ;;
 esac
 
