@@ -188,7 +188,11 @@ mkdir -p "$CONS/src"
 cd "$CONS"
 printf '%s\n' '[package]' 'name = "consumer"' 'version = "0.1.0"' 'edition = "2021"' '' \
   '[dependencies]' "$CRATE = \"$VER\"" > Cargo.toml
-printf '%s\n' "fn main() { println!(\"{}\", $CRATE::greet()); }" > src/main.rs
+# Rust identifiers cannot contain '-', so a crate named easyblobs-e2e-crate is
+# imported as easyblobs_e2e_crate. Writing $CRATE straight into the code is a
+# syntax error, not a missing package.
+RUSTID=$(printf '%s' "$CRATE" | tr '-' '_')
+printf '%s\n' "fn main() { println!(\"{}\", $RUSTID::greet()); }" > src/main.rs
 cargo run --quiet 2>/dev/null | grep -q 'ez hello' ||
   fail "the published crate cannot be used by a consumer"
 echo "   the consumer ran it"
