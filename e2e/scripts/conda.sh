@@ -80,6 +80,17 @@ mkdir -p "$BLD/info" "$BLD/site-packages"
 } > "$BLD/info/index.json"
 printf '%s\n' 'def greet():' '    return "ez hello"' \
   > "$BLD/site-packages/easyblobs_e2e.py"
+# info/files is not optional: micromamba reads it while linking and refuses the
+# cache without it:
+#   Invalid package cache, could not read 'paths.json' ...
+#   failed to open .../info/files: No such file or directory
+# It lists every payload path, one per line.
+printf '%s\n' 'site-packages/easyblobs_e2e.py' > "$BLD/info/files"
+# paths.json is the modern equivalent and is what libmamba prefers; write it too
+# so the package works on both code paths.
+printf '%s\n' '{"paths": [{"_path": "site-packages/easyblobs_e2e.py",' \
+  '            "path_type": "hardlink", "file_mode": "text", "size_in_bytes": 43}]}' \
+  > "$BLD/info/paths.json"
 ( cd "$BLD" && tar -cjf "$WORK/$CH-$VER-py_0.tar.bz2" info site-packages ) ||
   fail "build the .tar.bz2"
 [ -s "$WORK/$CH-$VER-py_0.tar.bz2" ] || fail "no package archive produced"
