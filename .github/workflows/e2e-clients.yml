@@ -968,7 +968,8 @@ jobs:
           name: easyblobs-log-hosted-${{ matrix.protocol }}
           path: /tmp/easyblobs.log
           if-no-files-found: ignore
-  probe-search:
+  probe-deprecate:
+    needs: [server]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -980,26 +981,35 @@ jobs:
           set -eu
           chmod +x /tmp/bin/easyblobs-bin
           mkdir -p /tmp/eb-data
-          EASYBLOBS_DEBUG=1 /tmp/bin/easyblobs-bin --listen 127.0.0.1:8080 \
+          EASYBLOGS_DEBUG=1 /tmp/bin/easyblobs-bin --listen 127.0.0.1:8080 \
             --data /tmp/eb-data --self-base http://127.0.0.1:8080 \
             >/tmp/easyblobs.log 2>&1 &
           i=0
           until curl -fsS --noproxy '*' http://127.0.0.1:8080/healthz >/dev/null 2>&1; do
             i=$((i+1)); [ $i -gt 120 ] && { cat /tmp/easyblobs.log; exit 1; }; sleep 0.5
           done
-      - name: raw search body
+      - name: publish, then deprecate by hand
         run: |
+          set -eu
           B=http://127.0.0.1:8080/artifacts/npm
-          echo '--- /-/v1/search?text=express ---'
-          curl -sS "$B/-/v1/search?text=express" | head -c 600; echo
-          echo '--- /-/v1/search?text=left-pad (after a pull) ---'
-          curl -sS -o /dev/null "$B/left-pad"   # populate the local index
-          curl -sS "$B/-/v1/search?text=left-pad" | head -c 600; echo
-          echo '--- /-/all ---'
-          curl -sS "$B/-/all" | head -c 300; echo
-          echo '--- what the CLI needs: objects[].package.name/version/description ---'
-          curl -sS "$B/-/v1/search?text=left-pad" \
-            | python3 -c 'import json,sys; d=json.load(sys.stdin); print("total", d.get("total"), "objects", len(d.get("objects") or [])); [print("  ", (o.get("package") or {}).get("name"), (o.get("package") or {}).get("version")) for o in (d.get("objects") or [])[:3]]' || true
+          D=$(mktemp -d); cd "$D"
+          printf '{"name":"@probe/dep","version":"1.0.0","main":"i.js","files":["i.js"],"license":"Apache-2.0"}' > package.json
+          printf 'module.exports=1;\n' > i.js
+          T=$(mktemp); ( tar -czf "$T" package.json i.js )
+          EMB=$(base64 -w0 < "$T")
+          printf '{"_attachments":{"dep-1.0.0.tgz":{"data":"%s"}},"name":"@probe/dep","versions":{"1.0.0":{"name":"@probe/dep","version":"1.0.0","dist":{}}}}' "$EMB" > /tmp/pub.json
+          echo "PUT publish: $(curl -sS -o /dev/null -w '%{http_code}' -X PUT "$B/@probe%2Fdep" --data-binary @/tmp/pub.json)"
+          echo '--- packument before ---'
+          curl -sS "$B/@probe%2Fdep" | head -c 400; echo
+          echo '--- PUT deprecate (handler shape) ---'
+          echo "code=$(curl -sS -o /tmp/dep.out -w '%{http_code}' -X PUT "$B/@probe%2Fdep/deprecate" --data-binary '{"versions":{"1.0.0":"use 2.x"}}')"
+          cat /tmp/dep.out; echo
+          echo '--- packument after ---'
+          curl -sS "$B/@probe%2Fdep" > /tmp/after.json
+          python3 -c 'import json;d=json.load(open("/tmp/after.json"));vs=d.get("versions") or {};print("versions:",list(vs));[print(" ",v,"deprecated=",repr((vs[v] or {}).get("deprecated"))) for v in vs]'
+          echo '--- server log for the deprecate call ---'
+          grep -i deprecat /tmp/easyblobs.log | tail -5 || true
+
 
   verify-easysetup:
     needs: [server]
