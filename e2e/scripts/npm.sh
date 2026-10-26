@@ -144,6 +144,23 @@ echo "== deprecate =="
 # once a package has several versions and printed nothing even when the flag
 # had landed, which is what made this look like a server bug.
 npm deprecate "$NAME@1.0.0" "use 2.0.0" || fail "deprecate"
+# The whole packument went up over the wire, so this is also the check that a
+# version-preserving update did not DROP the other version: npm deprecate PUTs
+# /<pkg> with every version in it, and publish() records only the first one it
+# finds in that map.
+VERS=$(curl -sS "$REG$NAME" | node -e '
+let s = ""
+process.stdin.on("data", d => s += d).on("end", () => {
+  try {
+    const p = JSON.parse(s)
+    process.stdout.write(Object.keys((p && p.versions) || {}).sort().join(","))
+  } catch (e) {}
+})')
+echo "   versions after deprecate: [$VERS]"
+case "$VERS" in
+  *1.0.0*2.0.0*|*2.0.0*1.0.0*) : ;;
+  *) fail "the deprecate PUT lost a version: [$VERS] (expected 1.0.0 and 2.0.0)" ;;
+esac
 # Parse the JSON properly. A regex over the raw body is fragile in exactly the
 # way it just was: "deprecated" can appear before or after the version key
 # depending on field order, and the first attempt therefore matched nothing and
