@@ -36,11 +36,15 @@ if [ ! -d "$OPAMROOT" ]; then
 fi
 
 echo "== add the mount as a repository =="
-opam repo add easyblobs "$EASYBLOBS_BASE" 2>&1 | tail -5 ||
+# --all-switches: a repository is per-switch state, and `opam init --bare` leaves
+# no switch. Without this, `opam repo add` prints "[easyblobs] Initialised" and
+# then "No switch is currently set", and `opam repo list` shows nothing.
+opam repo add easyblobs "$EASYBLOBS_BASE" --all-switches --set-default 2>&1 | tail -5 ||
   fail "opam repo add $EASYBLOBS_BASE"
 
 echo "== the repository is listed =="
-opam repo list 2>&1 | grep -q easyblobs || fail "the mirror is not in opam's repo list"
+opam repo list --all 2>&1 | grep -q easyblobs ||
+  fail "the mirror is not in opam's repo list"
 
 echo "== opam can resolve a package out of the mirror's index =="
 # No `| tail -5` on this one: piping swallowed the error and the `||` then fired

@@ -108,7 +108,9 @@ printf '%s\n' '[package]' 'name = "p4"' 'version = "0.1.0"' 'edition = "2021"' '
 # package.
 printf '%s\n' \
   'fn main() {' \
-  '    let pid = libc::getpid();' \
+  '    // getpid is an unsafe fn: calling it outside an unsafe block is E0133,' \
+  '    // which is what the earlier version of this test reported.' \
+  '    let pid = unsafe { libc::getpid() };' \
   '    println!("libc: {}", pid > 0);' \
   '}' > src/main.rs
 #

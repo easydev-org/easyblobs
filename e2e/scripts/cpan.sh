@@ -47,8 +47,16 @@ if ! command -v cpanm >/dev/null; then
     tail -12 /tmp/cpanm-install.log >&2
   fi
   # Any of these locations is where a CPAN install would have put it.
+  #
+  # An `[ -x ] && PATH=... && break` chain looks tidy and is wrong under `set -e`:
+  # the loop's last command is the failed test, so the whole list aborts the
+  # script instead of moving to the next candidate. A plain `if` does not.
   for d in "$HOME/.local/bin" /tmp/cpanhome/bin /usr/local/bin "$HOME/perl5/bin"; do
-    [ -x "$d/cpanm" ] && PATH="$d:$PATH" && export PATH && break
+    if [ -x "$d/cpanm" ]; then
+      PATH="$d:$PATH"
+      export PATH
+      break
+    fi
   done
   if ! command -v cpanm >/dev/null; then
     # Last resort: cpanm is a single Perl script; the mirror serves it.
