@@ -107,6 +107,11 @@ fi
 # ------------------------------------------------------------------ hosted --
 PKG="easyblobs_e2e_hex"
 VER="1.0.0"
+# A second version stays behind on purpose. The harness asserts that a hosted run
+# left something in the store (otherwise an adapter that stores nothing would
+# pass); deleting the only version makes that count zero and the assertion fail
+# for the right reason on the wrong thing.
+KEEP="1.0.1"
 PROJ="$WORK/proj"
 mkdir -p "$PROJ/lib"
 cd "$PROJ"
@@ -184,6 +189,27 @@ case "$code" in
     echo "   gone from /versions" ;;
   *) echo "   (DELETE answered $code - not fatal)" ;;
 esac
+
+# ------------------------------------------------------------------ keep one --
+# Publish a second version and leave it: the harness requires a hosted run to
+# have left SOMETHING in the store, and a suite that deletes its last artefact
+# would satisfy the mirror's behaviour while failing that check.
+echo "== publish a second version and keep it =="
+STAGE2="$WORK/stage2/$PKG-$KEEP"
+mkdir -p "$STAGE2"
+cp -a lib mix.exs "$STAGE2/"
+printf '%s\n' "$KEEP" > "$STAGE2/VERSION"
+printf '%s\n' "%% generated for the e2e suite" \
+  "{\"name\", \"$PKG\"}." \
+  "{\"version\", \"$KEEP\"}." > "$STAGE2/metadata.config"
+( cd "$WORK/stage2" && tar -cf "$WORK/$PKG-$KEEP.tar" "$PKG-$KEEP" ) ||
+  fail "tar the second release"
+code=$(curl -sS -o /tmp/rel2.out -w '%{http_code}' -X POST \
+  -H 'Content-Type: application/octet-stream' \
+  --data-binary "@$WORK/$PKG-$KEEP.tar" \
+  "$BASE/api/packages/$PKG/releases?name=$PKG&version=$KEEP")
+case "$code" in 200|201|204) echo "   published $KEEP (left in place)" ;;
+  *) fail "POST the second release -> $code $(cat /tmp/rel2.out)" ;; esac
 
 echo "hex: OK (pull: public_key names versions deps.get compile run)"
 echo "hex: OK (hosted: build publish index tarball-bytes retire delete)"
