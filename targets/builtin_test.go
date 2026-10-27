@@ -38,7 +38,6 @@ var legacyDefaults = map[string]string{
 	"protobuf": "https://buf.build",
 	"gitlfs":   "",
 
-	"jsr":      "https://jsr.io",
 	"opam":     "https://opam.ocaml.org",
 	"stackage": "https://stackage.org",
 	"pecl":     "https://pecl.php.net",
