@@ -62,7 +62,7 @@ write_conf() {
 echo "== pull: the database is served =="
 IDX=""
 for f in core.db core.db.tar.gz; do
-  code=$(curl -s -o "$WORK/db.bin" -w '%{http_code}' "$BASE/arch/core/os/x86_64/$f" 2>/dev/null || echo 000)
+  code=$(curl -s -o "$WORK/db.bin" -w '%{http_code}' "$BASE/core/os/x86_64/$f" 2>/dev/null || echo 000)
   if [ "$code" = "200" ] && [ -s "$WORK/db.bin" ]; then
     IDX="$f"
     echo "   $f ($(wc -c < "$WORK/db.bin") bytes)"
@@ -83,7 +83,11 @@ grep -q '^%SHA256SUM%' "$DESC" || fail "a desc has no %SHA256SUM%"
 echo "   the desc carries FILENAME and SHA256SUM"
 
 echo "== pull: pacman -Sy parses the database =="
-SERVER="$BASE/arch/\$repo/os/\$arch"
+# The mount IS the mirror root: a pacman Server line of
+# "http://host/artifacts/arch/easyblobs" means /artifacts/arch/<repo>/os/<arch>/,
+# so the path under $BASE is just $repo/... - prefixing "arch" again produced
+# /artifacts/arch/arch/core/os/x86_64/core.db, which 404s.
+SERVER="$BASE/\$repo/os/\$arch"
 CACHE="$WORK/cache"
 write_conf
 if pacman --config "$PACCONF" -Sy >/tmp/arch-sy.log 2>&1; then
