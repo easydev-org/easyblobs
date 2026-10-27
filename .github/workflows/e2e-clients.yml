@@ -496,6 +496,14 @@ jobs:
           set -eu
           if command -v apk >/dev/null; then
             apk add --no-cache alpine-sdk build-base 2>/dev/null || true
+            # shadow provides useradd, which the arch suite needs to drop root
+            # for makepkg.
+            apk add --no-cache shadow 2>/dev/null || true
+          elif command -v pacman >/dev/null; then
+            # makepkg is the reference builder for a .pkg.tar.zst, the same way
+            # dpkg-deb and rpmbuild are used for theirs. It arrives with
+            # pacman itself; shadow gives the suite useradd.
+            pacman -Sy --noconfirm --needed pacman shadow 2>/dev/null || true
           elif command -v dnf >/dev/null; then
             dnf install -y -q rpm-build 2>/dev/null || true
           elif command -v apt-get >/dev/null; then

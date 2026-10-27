@@ -125,65 +125,60 @@ REL="1"
 ARCHN="x86_64"
 FN="$PKGNAME-$VER-$REL-$ARCHN.pkg.tar.zst"
 
-SRC="$WORK/pkgroot"
-mkdir -p "$SRC/usr/bin"
-printf '%s\n' '#!/bin/sh' 'echo "ez hello"' > "$SRC/usr/bin/ezhello"
-chmod 755 "$SRC/usr/bin/ezhello"
-{
-  echo "pkgname = $PKGNAME"
-  echo "pkgver = $VER-$REL"
-  echo "pkgdesc = easyblobs e2e"
-  echo "url = https://example.com"
-  echo "builddate = $(date +%s)"
-  echo "packager = e2e"
-  echo "size = $(wc -c < "$SRC/usr/bin/ezhello")"
-  echo "arch = $ARCHN"
-  echo "license = Apache-2.0"
-} > "$SRC/.PKGINFO"
-
-# pacman VERIFIES the package against the .MTREE member before installing:
+# makepkg is the reference builder, exactly as dpkg-deb and rpmbuild are used
+# for their formats. A hand-assembled package was rejected twice:
 #   File ... is corrupted (invalid or corrupted package)
-# so a tar with only .PKGINFO and the payload is rejected even though it looks
-# complete. The real shape is three metadata members plus the payload:
-#   .BUILDINFO  .MTREE  .PKGINFO  usr/...
-#
-# .MTREE is a GZIPPED mtree spec: a "#mtree" line, then one entry per path with
-# its size and sha256digest. pacman compares what it unpacked against it.
-{
-  echo "#mtree"
-  echo "/set type=file uid=0 gid=0 mode=644"
-  for f in .PKGINFO; do
-    printf './%s time=%s size=%s sha256digest=%s\n' \
-      "$f" "$(date +%s)" "$(wc -c < "$SRC/$f")" "$(sha256sum "$SRC/$f" | cut -d' ' -f1)"
-  done
-  # Directories carry type=dir and no digest.
-  ( cd "$SRC" && find usr -type d | sed 's|^|./|' ) | while read -r d; do
-    printf '%s time=%s type=dir\n' "$d" "$(date +%s)"
-  done
-  ( cd "$SRC" && find usr -type f | sed 's|^|./|' ) | while read -r f; do
-    p="$SRC/${f#./}"
-    printf '%s time=%s size=%s sha256digest=%s\n' \
-      "$f" "$(date +%s)" "$(wc -c < "$p")" "$(sha256sum "$p" | cut -d' ' -f1)"
-  done
-} > "$SRC/.MTREE.plain"
-gzip -c "$SRC/.MTREE.plain" > "$SRC/.MTREE"
-
-# .BUILDINFO is not verified, but pacman tools expect it; an empty-shaped file
-# is enough and keeps the member list faithful.
-{
-  echo "format = 2"
-  echo "pkgname = $PKGNAME"
-  echo "pkgver = $VER-$REL"
-  echo "packager = e2e"
-  echo "builddate = $(date +%s)"
-} > "$SRC/.BUILDINFO"
-
-if command -v zstd >/dev/null 2>&1; then
-  ( cd "$SRC" && tar -cf - .BUILDINFO .MTREE .PKGINFO usr | zstd -q -o "$WORK/$FN" ) ||
-    fail "build the .pkg.tar.zst"
-else
-  fail "no zstd available to build the package"
+# A real package carries .BUILDINFO, .MTREE and .PKGINFO, and .MTREE is a gzipped
+# mtree spec pacman verifies every unpacked path against. Reproducing that by
+# hand is guesswork; makepkg gets it right by construction.
+if ! command -v makepkg >/dev/null 2>&1; then
+  echo "arch: makepkg is not installed; the hosted case cannot build a package." >&2
+  echo "arch: (it comes from the pacman package, which the distro job installs)" >&2
+  exit 1
 fi
+
+SRC="$WORK/pkgbuild"
+mkdir -p "$SRC"
+printf '%s\n' '#!/bin/sh' 'echo "ez hello"' > "$SRC/ezhello"
+chmod 755 "$SRC/ezhello"
+# APKBUILD's analogue: a PKGBUILD is sourced as shell, so assignments have no
+# spaces around '='.
+{
+  echo "pkgname=$PKGNAME"
+  echo "pkgver=$VER"
+  echo "pkgrel=$REL"
+  echo 'pkgdesc="easyblobs e2e"'
+  echo 'arch=("x86_64")'
+  echo 'url="https://example.com"'
+  echo 'license=("Apache-2.0")'
+  echo 'options=(!strip !buildflags)'
+  echo 'source=()'
+  echo 'package() {'
+  echo '  install -Dm755 "$srcdir/ezhello" "$pkgdir/usr/bin/ezhello"'
+  echo '}'
+} > "$SRC/PKGBUILD"
+
+# makepkg REFUSES to run as root:
+#   error: Running makepkg as root is not allowed as it can cause
+#   permanent, catastrophic damage to your system
+# The container runs as root, so a throwaway user builds the package and the
+# output is handed back. Everything it writes lives under $WORK.
+if [ "$(id -u)" = "0" ]; then
+  command -v useradd >/dev/null 2>&1 || fail "need useradd to drop root for makepkg"
+  id -u ezmk >/dev/null 2>&1 || useradd -m -s /bin/sh ezmk
+  chown -R ezmk "$WORK"
+  RUNAS="su ezmk -s /bin/sh -c"
+else
+  RUNAS="sh -c"
+fi
+$RUNAS "cd '$SRC' && PKGDEST='$WORK/pkgs' SRCDEST='$SRC' BUILDDIR='$WORK/build' \
+    makepkg -f --nocheck --noconfirm" >/tmp/makepkg.log 2>&1 || {
+  echo "arch: makepkg failed:" >&2
+  tail -30 /tmp/makepkg.log >&2
+  exit 1; }
+FN=$(basename "$(find "$WORK/pkgs" -name '*.pkg.tar.zst' | head -1)")
+[ -n "$FN" ] || fail "makepkg produced no package"
+mv "$WORK/pkgs/$FN" "$WORK/$FN" 2>/dev/null || true
 [ -s "$WORK/$FN" ] || fail "no package produced"
 echo "   built $FN ($(wc -c < "$WORK/$FN") bytes)"
 
