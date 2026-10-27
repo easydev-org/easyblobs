@@ -85,11 +85,27 @@ if command -v abuild >/dev/null 2>&1; then
   # without it abuild stops at "No private key found".
   if [ ! -f "$HOME/.abuild/abuild.conf" ]; then
     mkdir -p "$HOME/.abuild"
-    # -n '' means no passphrase: this key signs a throwaway test package.
-    abuild-keygen -a -i -n >/tmp/abuild-key.log 2>&1 || {
+    # -n: no passphrase. NO -i: that flag tries to install the public key into
+    # /etc/apk/keys with `doas`, and a GitHub container has neither:
+    #   /usr/bin/abuild-keygen: line 63: doas: not found
+    # The key is still written to ~/.abuild; it is copied into place below.
+    abuild-keygen -a -n >/tmp/abuild-key.log 2>&1 || {
       echo "apk: abuild-keygen failed:" >&2
       tail -10 /tmp/abuild-key.log >&2
       exit 1; }
+  fi
+  # Install the public key where apk looks for it. We are root in this container,
+  # so this is a plain copy - which is what -i would have done via doas.
+  mkdir -p /etc/apk/keys
+  for k in "$HOME"/.abuild/*.rsa.pub; do
+    [ -f "$k" ] && cp "$k" /etc/apk/keys/ && echo "   installed key $(basename "$k")"
+  done
+  if [ ! -f "$HOME/.abuild/abuild.conf" ]; then
+    {
+      echo "PACKAGER=\"e2e <e2e@example.com>\""
+      key=$(ls "$HOME"/.abuild/*.rsa 2>/dev/null | head -1)
+      [ -n "$key" ] && echo "PACKAGER_PRIVKEY=\"$key\""
+    } > "$HOME/.abuild/abuild.conf"
   fi
   SRCDEST="$WORK/srcdest"
   mkdir -p "$SRCDEST"
