@@ -64,7 +64,7 @@ stackage	ubuntu-latest	pull-only	cabal via haskell-actions/setup	ghc cabal
 opam	ubuntu-latest	pull-only	opam via ocaml/setup-ocaml	opam
 pecl	ubuntu-latest	pull-only	pecl via shivammathur/setup-php	php
 cpan	ubuntu-latest	hosted	cpanm via shogo82148/actions-setup-perl	perl
-nix	ubuntu-latest	pull-only	nix via cachix/install-nix-action	nix
+nix	ubuntu-latest	hosted	nix via cachix/install-nix-action	nix
 luarocks	ubuntu-latest	pull-only	luarocks via leafo/gh-actions-luarocks	lua luarocks
 nuget	ubuntu-latest	hosted	dotnet via actions/setup-dotnet	dotnet
 conda	ubuntu-latest	hosted	conda via conda-incubator/setup-miniconda	micromamba
@@ -81,4 +81,5 @@ rpm	container:fedora:41	pull-only	dnf tests THIS distro's repomd metadata
 # --- protocols whose client is plain HTTP by nature ---
 netcache	ubuntu-latest	pull-only	curl IS the client (raw HTTP cache semantics)	
 oci	ubuntu-latest	pull-only	wget speaks the OCI /v2 protocol (no docker daemon needed)	
+
 

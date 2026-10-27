@@ -8,16 +8,25 @@
 #   <base>/nar/<hash>.nar[.xz|.zst] the archive itself
 #
 # Anything else is 404 by construction, because isCachePath() only accepts
-# those three shapes. There is NO write path: ServeHTTP answers 405 to anything
-# that is not GET/HEAD. A binary cache is read-only in the protocol itself, so
-# this is a PULL suite and that is not a gap - it is the protocol.
+# those three shapes.
+#
+# A binary cache IS writable in the protocol: `nix copy --to <url>` PUTs the
+# same narinfo/nar pair a GET reads, and nix-serve/Cachix/Attic all accept it.
+# This adapter used to answer 405 to every non-GET; it now serves
+# /_hosted/<repo>/ with PUT, GET and DELETE.
 #
 # PULL
-#   nix-cache-info        served, and names a StoreDir and a WantMassQuery
-#   a .narinfo            fetched for a real path, fields parse
-#   the .nar it points at  downloaded, and the FileHash matches the bytes
+#   nix-cache-info        served, and names a StoreDir
 #   nix store info        the client agrees the store is usable
-#   a path that is NOT a cache path must 404, not hang or 500
+#   evaluation            the client itself is intact
+#   the 404 shapes        a non-cache path and a malformed narinfo name are
+#                         refused rather than proxied
+#
+# HOSTED
+#   PUT narinfo + nar     published under _hosted/<repo>/
+#   GET them back         byte-identical
+#   DELETE                removes the entry
+#   nix-cache-info        cannot be uploaded: it describes the mount
 set -eu
 : "${EASYBLOBS_BASE:?EASYBLOBS_BASE not set}"
 
@@ -89,12 +98,79 @@ case "$code" in
   *) fail "malformed narinfo answered $code, expected 404" ;;
 esac
 
-echo "== the cache refuses writes (the protocol has no publish) =="
+echo "== a write to the PULL namespace is still refused =="
+# The proxying side stays read-only: you publish to _hosted/<repo>/, not into
+# the upstream cache's own namespace.
 code=$(curl -s -o /dev/null -w '%{http_code}' -X PUT --data-binary "x" \
-  "$BASE/nix-cache-info")
+  "$BASE/$HASH32.narinfo")
 case "$code" in
-  405) echo "   PUT -> 405 (read-only by design)" ;;
-  *) echo "   PUT -> $code (informational: the protocol defines no upload)" ;;
+  405) echo "   PUT into the upstream namespace -> 405 (correct)" ;;
+  *) fail "PUT into the upstream namespace answered $code, expected 405" ;;
 esac
 
-echo "nix: OK (pull: cache-info store-info evaluation 404s read-only)"
+# ------------------------------------------------------------------ hosted --
+echo "== hosted: publish a narinfo and the nar it names =="
+REV="e2e"
+# A store-path hash is 32 chars of nix-base32. It only has to be well formed for
+# the adapter to accept it; nix would additionally verify NarHash on a real pull.
+H="11111111111111111111111111111111"
+NARINFO="$WORK/$H.narinfo"
+{
+  echo "StorePath: /nix/store/$H-easyblobs-e2e-1.0.0"
+  echo "URL: nar/$H.nar"
+  echo "Compression: none"
+  echo "NarSize: 16"
+} > "$NARINFO"
+printf 'ez hello nix nar' > "$WORK/$H.nar"
+
+for pair in "$H.narinfo" "nar/$H.nar"; do
+  case "$pair" in
+    *.narinfo) src="$NARINFO" ;;
+    *)         src="$WORK/$H.nar" ;;
+  esac
+  code=$(curl -sS -o /tmp/nix-up.out -w '%{http_code}' -X PUT \
+    --data-binary "@$src" "$BASE/_hosted/$REV/$pair")
+  case "$code" in
+    200|201) echo "   PUT $pair -> $code" ;;
+    *) fail "PUT $pair -> $code $(cat /tmp/nix-up.out)" ;;
+  esac
+done
+
+echo "== hosted: both come back byte-identically =="
+curl -fsS -o "$WORK/back.narinfo" "$BASE/_hosted/$REV/$H.narinfo" ||
+  fail "the narinfo is not served back"
+cmp -s "$WORK/back.narinfo" "$NARINFO" || fail "the narinfo came back changed"
+curl -fsS -o "$WORK/back.nar" "$BASE/_hosted/$REV/nar/$H.nar" ||
+  fail "the nar is not served back"
+cmp -s "$WORK/back.nar" "$WORK/$H.nar" || fail "the nar bytes differ"
+echo "   bytes match"
+
+echo "== hosted: nix-cache-info is generated, not uploadable =="
+code=$(curl -s -o /dev/null -w '%{http_code}' -X PUT --data-binary "StoreDir: /x" \
+  "$BASE/_hosted/$REV/nix-cache-info")
+[ "$code" = "405" ] || fail "PUT nix-cache-info answered $code, expected 405"
+echo "   PUT nix-cache-info -> 405 (it describes the mount)"
+curl -fsS "$BASE/_hosted/$REV/nix-cache-info" | grep -q "StoreDir: /nix/store" ||
+  fail "the mounted cache-info is not the mount's own"
+echo "   GET nix-cache-info still answers with the mount's StoreDir"
+
+echo "== hosted: a path the read side would refuse is not publishable =="
+code=$(curl -s -o /dev/null -w '%{http_code}' -X PUT --data-binary "x" \
+  "$BASE/_hosted/$REV/not/a/cache/path")
+[ "$code" = "404" ] || fail "publishing a non-cache path answered $code, expected 404"
+echo "   a non-cache path -> 404 (the write and read sides agree)"
+
+echo "== hosted: DELETE removes the entry =="
+code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
+  "$BASE/_hosted/$REV/$H.narinfo")
+case "$code" in
+  200|204) echo "   deleted" ;;
+  *) echo "   (DELETE answered $code)" ;;
+esac
+if curl -fsS "$BASE/_hosted/$REV/$H.narinfo" >/dev/null 2>&1; then
+  fail "the deleted narinfo is still served"
+fi
+echo "   gone"
+
+echo "nix: OK (pull: cache-info store-info evaluation 404s upstream-readonly)"
+echo "nix: OK (hosted: put narinfo nar bytes cache-info-refused invalid-path delete)"
