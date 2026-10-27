@@ -53,7 +53,11 @@ write_conf() {
     echo "SigLevel = Optional TrustAll"
     echo "HoldPkg ="
     echo ""
-    echo "[e2e]"
+    # The section name IS the repository name: pacman substitutes it for $repo
+    # in the Server line, so [e2e] asks for e2e.db while [core] asks for
+    # core.db. Hardcoding [e2e] here made the pull half request e2e.db from a
+    # mount that only mirrors core - a 404 that looked like a missing database.
+    echo "[$REPO_NAME]"
     echo "Server = $SERVER"
   } > "$PACCONF"
 }
@@ -88,6 +92,7 @@ echo "== pull: pacman -Sy parses the database =="
 # so the path under $BASE is just $repo/... - prefixing "arch" again produced
 # /artifacts/arch/arch/core/os/x86_64/core.db, which 404s.
 SERVER="$BASE/\$repo/os/\$arch"
+REPO_NAME="core"
 CACHE="$WORK/cache"
 write_conf
 if pacman --config "$PACCONF" -Sy >/tmp/arch-sy.log 2>&1; then
@@ -195,6 +200,9 @@ mkdir -p "$ROOT2" "$DBPATH2" "$CACHE2"
 ROOT="$ROOT2"
 DBPATH="$DBPATH2"
 CACHE="$CACHE2"
+# The hosted repo is published under the name the suite created (e2e), so the
+# section must be e2e - pacman will ask for e2e.db, which GenerateDB produces.
+REPO_NAME="e2e"
 SERVER="$BASE/_hosted/e2e/\$repo/os/\$arch"
 write_conf
 
