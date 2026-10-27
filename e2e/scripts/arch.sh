@@ -151,7 +151,13 @@ chmod 755 "$SRC/ezhello"
   echo 'arch=("x86_64")'
   echo 'url="https://example.com"'
   echo 'license=("Apache-2.0")'
-  echo 'options=(!strip !buildflags)'
+  # NO options=() overrides. `options=(!strip !buildflags)` was there to keep
+  # makepkg from touching the script, but it also stops makepkg from processing
+  # the debug paths it creates: the package ended up with usr/src/debug/...
+  # directories that the .MTREE member does not list, and pacman rejects a
+  # package whose contents disagree with its own .MTREE:
+  #   File ... is corrupted (invalid or corrupted package)
+  # The defaults are correct; a shell script does not need stripping overrides.
   # source MUST list the file. makepkg copies only what is named there into
   # $srcdir, so with source=() the package() step ran against an empty srcdir:
   #   install: cannot stat '.../src/ezhello': No such file or directory
