@@ -550,7 +550,11 @@ case "$DIRECTION" in
       # Requiring a fixture for them pushed the coverage back to pull-only,
       # which is how conan and pub were mislabelled as read-only in the first
       # place. If the script covers the hosted direction, run the script.
-      if grep -q "hosted:" "e2e/scripts/$PROTO.sh" 2>/dev/null; then
+      # $REPO, not a relative path: ci-run.sh has cd'ed into $WORK by now, so
+      # "e2e/scripts/..." does not resolve and the grep silently failed -
+      # which is what made nix, conan and pub report "no hosted section" while
+      # the section was right there in the file.
+      if grep -q "hosted:" "$REPO/e2e/scripts/$PROTO.sh" 2>/dev/null; then
         echo "=== e2e/$PROTO hosted: the suite publishes directly (no fixture) ==="
         run_pull_suite || exit 1
       else
