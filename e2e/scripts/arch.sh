@@ -141,13 +141,45 @@ chmod 755 "$SRC/usr/bin/ezhello"
   echo "license = Apache-2.0"
 } > "$SRC/.PKGINFO"
 
-# pacman refuses a package without .MTREE only when checking; for install the
-# shape that matters is a tar containing .PKGINFO and the payload.
-if command -v bsdtar >/dev/null 2>&1; then
-  ( cd "$SRC" && bsdtar -cf - .PKGINFO usr | zstd -q -o "$WORK/$FN" ) ||
-    fail "build the .pkg.tar.zst with bsdtar"
-elif command -v zstd >/dev/null 2>&1; then
-  ( cd "$SRC" && tar --zstd -cf "$WORK/$FN" .PKGINFO usr ) ||
+# pacman VERIFIES the package against the .MTREE member before installing:
+#   File ... is corrupted (invalid or corrupted package)
+# so a tar with only .PKGINFO and the payload is rejected even though it looks
+# complete. The real shape is three metadata members plus the payload:
+#   .BUILDINFO  .MTREE  .PKGINFO  usr/...
+#
+# .MTREE is a GZIPPED mtree spec: a "#mtree" line, then one entry per path with
+# its size and sha256digest. pacman compares what it unpacked against it.
+{
+  echo "#mtree"
+  echo "/set type=file uid=0 gid=0 mode=644"
+  for f in .PKGINFO; do
+    printf './%s time=%s size=%s sha256digest=%s\n' \
+      "$f" "$(date +%s)" "$(wc -c < "$SRC/$f")" "$(sha256sum "$SRC/$f" | cut -d' ' -f1)"
+  done
+  # Directories carry type=dir and no digest.
+  ( cd "$SRC" && find usr -type d | sed 's|^|./|' ) | while read -r d; do
+    printf '%s time=%s type=dir\n' "$d" "$(date +%s)"
+  done
+  ( cd "$SRC" && find usr -type f | sed 's|^|./|' ) | while read -r f; do
+    p="$SRC/${f#./}"
+    printf '%s time=%s size=%s sha256digest=%s\n' \
+      "$f" "$(date +%s)" "$(wc -c < "$p")" "$(sha256sum "$p" | cut -d' ' -f1)"
+  done
+} > "$SRC/.MTREE.plain"
+gzip -c "$SRC/.MTREE.plain" > "$SRC/.MTREE"
+
+# .BUILDINFO is not verified, but pacman tools expect it; an empty-shaped file
+# is enough and keeps the member list faithful.
+{
+  echo "format = 2"
+  echo "pkgname = $PKGNAME"
+  echo "pkgver = $VER-$REL"
+  echo "packager = e2e"
+  echo "builddate = $(date +%s)"
+} > "$SRC/.BUILDINFO"
+
+if command -v zstd >/dev/null 2>&1; then
+  ( cd "$SRC" && tar -cf - .BUILDINFO .MTREE .PKGINFO usr | zstd -q -o "$WORK/$FN" ) ||
     fail "build the .pkg.tar.zst"
 else
   fail "no zstd available to build the package"
