@@ -91,6 +91,12 @@ if [ -z "$APK" ]; then
   mkdir -p "$CTRL" "$DATA/usr/bin"
   cp "$SRC/ezhello" "$DATA/usr/bin/ezhello"
   chmod 755 "$DATA/usr/bin/ezhello"
+  # The data segment has to be built FIRST: .PKGINFO must carry datahash, the
+  # sha256 of that segment. Without it apk says:
+  #   WARNING: Support for packages without datahash will be dropped in apk-tools 3.
+  #   ERROR: <pkg>: BAD archive
+  ( cd "$DATA" && tar -czf "$WORK/data.tar.gz" usr ) || fail "data segment"
+  DATAHASH=$(sha256sum "$WORK/data.tar.gz" | cut -d' ' -f1)
   {
     echo "pkgname = $PKGNAME"
     echo "pkgver = $VER-r0"
@@ -101,9 +107,9 @@ if [ -z "$APK" ]; then
     echo "origin = $PKGNAME"
     echo "commit = e2e"
     echo "license = Apache-2.0"
+    echo "datahash = $DATAHASH"
   } > "$CTRL/.PKGINFO"
   ( cd "$CTRL" && tar -czf "$WORK/ctrl.tar.gz" .PKGINFO ) || fail "control segment"
-  ( cd "$DATA" && tar -czf "$WORK/data.tar.gz" usr ) || fail "data segment"
   cat "$WORK/ctrl.tar.gz" "$WORK/data.tar.gz" > "$WORK/$PKGNAME-$VER-r0.apk" ||
     fail "concatenate the .apk segments"
   APK="$WORK/$PKGNAME-$VER-r0.apk"
