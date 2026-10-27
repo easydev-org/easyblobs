@@ -266,6 +266,14 @@ else
   echo "arch: the hosted package could not be installed:" >&2
   tail -15 /tmp/arch-hsy.log >&2
   tail -15 /tmp/arch-hi.log >&2
+  # The member list goes INSIDE the failure: the job log is truncated before the
+  # earlier diagnostic, so only what is printed here survives.
+  echo "arch: the package pacman refused, member by member:" >&2
+  echo "arch:   size $(wc -c < "$WORK/$FN") bytes" >&2
+  zstd -dc "$WORK/$FN" 2>/dev/null | tar -tvf - 2>/dev/null | head -10 |
+    sed 's/^/arch:   /' >&2
+  echo "arch: makepkg's own log (tail):" >&2
+  tail -10 /tmp/makepkg.log >&2
   fail "hosted install"
 fi
 
