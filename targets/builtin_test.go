@@ -38,6 +38,7 @@ var legacyDefaults = map[string]string{
 	"protobuf": "https://buf.build",
 	"gitlfs":   "",
 	"arch":     "https://geo.mirror.pkgbuild.com",
+	"aur":      "https://aur.archlinux.org",
 
 	"opam":     "https://opam.ocaml.org",
 	"stackage": "https://stackage.org",

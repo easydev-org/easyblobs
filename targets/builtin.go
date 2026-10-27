@@ -128,6 +128,13 @@ func Builtins() []Target {
 		// mirror can be selected per repository through the upstream table.
 		{ID: "arch", Protocol: "arch", Kind: Mirror, Base: "https://geo.mirror.pkgbuild.com",
 			Hosts: []string{"geo.mirror.pkgbuild.com", "mirror.rackspace.com", "mirrors.kernel.org"}, Builtin: true},
+		// The Arch User Repository. Read-only by nature: its publish direction is
+		// an SSH git push to aur@aur.archlinux.org, which has no self-hosted
+		// protocol and no HTTP endpoint, so there is nothing to mirror in that
+		// direction. The read side (RPC, PKGBUILD, snapshots) is what yay and
+		// paru need, and both accept aururl/aurrpcurl overrides.
+		{ID: "aur", Protocol: "aur", Kind: Mirror, Base: "https://aur.archlinux.org",
+			Hosts: []string{"aur.archlinux.org"}, Builtin: true},
 		{
 			ID: "debian", Protocol: "debian", Kind: Mirror,
 			Base:    "https://deb.debian.org",

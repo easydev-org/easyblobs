@@ -43,6 +43,22 @@ import (
 //   - bazel   Bazel Central Registry: /modules/<name>/<ver>/*.json + source.json.
 //   - jenkins Jenkins update center: /download/plugins/... and update-center.json.
 //   - opam    opam repository index + cache archives.
+//   - aur     the Arch User Repository: /rpc/v5/{info,search}, /cgit/aur.git/
+//             {plain/PKGBUILD,snapshot/<pkg>.tar.gz} and /packages.gz.
+//
+// AUR is READ-ONLY here on purpose. Its publish direction is an SSH git push to
+// aur@aur.archlinux.org, which has no self-hosted equivalent and no HTTP
+// endpoint - so there is nothing for a hosted repository to stand in for. What
+// yay and paru actually need is the three read endpoints, and those are plain
+// HTTP GETs:
+//
+//   AURRPCURL + /rpc/v5/info?arg[]=<pkg>          package metadata
+//   AURURL    + /cgit/aur.git/plain/PKGBUILD?h=<pkg>  the build script
+//   AURURL    + /cgit/aur.git/snapshot/<pkg>.tar.gz   the source snapshot
+//
+// Unlike jsr.io, AUR's clients DO let you point them elsewhere: yay reads
+// aururl and aurrpcurl from its config (`yay --aururl`, `--aurrpcurl`), so a
+// mirror is usable rather than theoretical.
 //
 // JSR's native registry is deliberately NOT here. deno hard-codes jsr.io and
 // offers no way to point it elsewhere (there is no DENO_*_REGISTRY variable;
@@ -53,7 +69,7 @@ import (
 // tested as such.
 var trees = []string{
 	"hackage", "cran", "cpan", "luarocks", "juliapkg",
-	"opam", "stackage", "pecl", "bazel", "jenkins",
+	"opam", "stackage", "pecl", "bazel", "jenkins", "aur",
 }
 
 type State struct {

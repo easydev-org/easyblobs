@@ -75,12 +75,14 @@ jenkins	ubuntu-latest	hosted	jenkins-plugin-cli (jar fetched in the job) + setup
 # --- distro package managers: these NEED their own userland ---
 apk	container:alpine:3.20	hosted	apk(8) exists only on Alpine	
 arch	container:archlinux:latest	hosted	pacman via the archlinux image (no cross-distro substitute)
+aur	ubuntu-latest	pull-only	AUR read side via curl (publish is SSH git push, no HTTP endpoint)
 debian	container:debian:bookworm	hosted	apt tests THIS distro's archive layout	
 rpm	container:fedora:41	hosted	dnf tests THIS distro's repomd metadata	
 
 # --- protocols whose client is plain HTTP by nature ---
 netcache	ubuntu-latest	pull-only	curl IS the client (raw HTTP cache semantics)	
 oci	ubuntu-latest	hosted	wget speaks the OCI /v2 protocol (no docker daemon needed)	
+
 
 
 
