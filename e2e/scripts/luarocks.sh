@@ -3,6 +3,8 @@
 # and rock both come from the mirror).
 set -e
 : "${EASYBLOBS_BASE:?EASYBLOBS_BASE not set}"
+# The mount base without a trailing slash. The hosted section uses it.
+BASE="${EASYBLOBS_BASE%/}"
 
 # Do NOT swallow luarocks' output. It was redirected to /dev/null, so a failure
 # said only "luafilesystem not installed" and nothing about why. The rock is

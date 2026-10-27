@@ -110,8 +110,19 @@ fi
 echo "== hosted: install it back from the hosted repo =="
 LIBS2="$WORK/lib2"
 mkdir -p "$LIBS2"
-if Rscript -e "install.packages('$PKG', lib='$LIBS2', repos='$BASE/_hosted/e2e', quiet=TRUE, dependencies=FALSE)" \
+# NOT quiet: install.packages returning 0 while installing nothing is exactly
+# what happened the first time round - "installed from the hosted repo" printed,
+# then library() said 'there is no package called'. A quiet install that fails
+# silently is worse than a loud one that fails.
+if Rscript -e "install.packages('$PKG', lib='$LIBS2', repos='$BASE/_hosted/e2e', dependencies=FALSE)" \
      >/tmp/cran-h.log 2>&1; then
+  # The exit status is not the assertion - the installed directory is.
+  if [ ! -d "$LIBS2/$PKG" ]; then
+    echo "cran: install.packages succeeded but installed nothing." >&2
+    echo "cran: its log said:" >&2
+    tail -25 /tmp/cran-h.log >&2
+    fail "the hosted package was not installed"
+  fi
   echo "   installed from the hosted repo"
   OUT2=$(Rscript -e ".libPaths('$LIBS2'); library($PKG); cat(greet())" 2>&1) ||
     { echo "cran: the published package does not load:" >&2; echo "$OUT2" >&2; exit 1; }
@@ -119,7 +130,7 @@ if Rscript -e "install.packages('$PKG', lib='$LIBS2', repos='$BASE/_hosted/e2e',
   echo "   its function runs: $OUT2"
 else
   echo "cran: installing from the hosted repo failed:" >&2
-  tail -20 /tmp/cran-h.log >&2
+  tail -25 /tmp/cran-h.log >&2
   fail "hosted install"
 fi
 

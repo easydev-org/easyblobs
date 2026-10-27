@@ -4,6 +4,8 @@
 # verifying the update centre's own JSON schema when only that is available.
 set -e
 : "${EASYBLOBS_BASE:?EASYBLOBS_BASE not set}"
+# The mount base without a trailing slash. The hosted section uses it.
+BASE="${EASYBLOBS_BASE%/}"
 
 export JENKINS_UC="$EASYBLOBS_BASE"
 export JENKINS_UC_DOWNLOAD="$EASYBLOBS_BASE"

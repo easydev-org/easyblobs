@@ -13,6 +13,8 @@
 # the opam file from it, which a curl probe never does.
 set -eu
 : "${EASYBLOBS_BASE:?EASYBLOBS_BASE not set}"
+# The mount base without a trailing slash. The hosted section uses it.
+BASE="${EASYBLOBS_BASE%/}"
 
 fail() { echo "opam: FAIL: $*" >&2; exit 1; }
 
