@@ -111,6 +111,14 @@ jobs:
           python3 e2e/genmatrix.py --hosted > /tmp/hosted.json
           python3 e2e/genmatrix.py --distro > /tmp/distro.json
           echo "app=$(cat /tmp/app.json)"       >> "$GITHUB_OUTPUT"
+          # hosted was generated and printed but never PUBLISHED as an output,
+          # so needs.matrix.outputs.hosted was always empty and the hosted job
+          # expanded to zero entries. Every protocol marked "hosted" was
+          # therefore only ever exercised by its clients (pull) job, whose
+          # E2E_DIRECTION is hardcoded to pull - which is exactly how nix ended
+          # up "passing" while its new hosted assertions never ran as a hosted
+          # job. The declared outputs and the emitted ones have to agree.
+          echo "hosted=$(cat /tmp/hosted.json)" >> "$GITHUB_OUTPUT"
           echo "distro=$(cat /tmp/distro.json)" >> "$GITHUB_OUTPUT"
           echo "pull-through protocols:"; cat /tmp/app.json
           echo "hosted protocols:";       cat /tmp/hosted.json

@@ -542,11 +542,25 @@ case "$DIRECTION" in
     ;;
   hosted)
     if [ -z "$FIXTURE_DIR" ]; then
-      echo "::error::$PROTO has no hosted fixture; either add one to" >&2
-      echo "::error::easydev-org/easyblobs-test or drop it from the hosted matrix" >&2
-      exit 1
+      # Not every protocol needs a fixture to publish: the suite itself can do
+      # it. conan, pub and nix publish with plain HTTP calls (PUT /api/...,
+      # PUT /_hosted/<repo>/...) because their clients are awkward to drive for
+      # an upload, and those cases are already IN e2e/scripts/<proto>.sh.
+      #
+      # Requiring a fixture for them pushed the coverage back to pull-only,
+      # which is how conan and pub were mislabelled as read-only in the first
+      # place. If the script covers the hosted direction, run the script.
+      if grep -q "hosted:" "e2e/scripts/$PROTO.sh" 2>/dev/null; then
+        echo "=== e2e/$PROTO hosted: the suite publishes directly (no fixture) ==="
+        run_pull_suite || exit 1
+      else
+        echo "::error::$PROTO has no hosted fixture and no hosted section in its suite;" >&2
+        echo "::error::add one to easydev-org/easyblobs-test or drop it from the hosted matrix" >&2
+        exit 1
+      fi
+    else
+      run_hosted_fixture "$FIXTURE_DIR" || exit 1
     fi
-    run_hosted_fixture "$FIXTURE_DIR" || exit 1
     ;;
   build)
     # Read-only mirror: the adapter has no write path, so publishing is not a
