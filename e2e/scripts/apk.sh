@@ -155,50 +155,17 @@ if command -v abuild >/dev/null 2>&1; then
   fi
 fi
 if [ -z "$APK" ]; then
-  echo "apk: abuild is not available; falling back to building the segments by hand" >&2
-  # Record that the archive is NOT from the reference implementation. If the
-  # install below then fails, the failure is in this fallback - not in the mirror,
-  # which served the package and put it in APKINDEX correctly.
-  HAND_BUILT=yes
-  # A .apk is NOT one tarball. It is up to three CONCATENATED gzipped tars:
-  #
-  #   [signature segment]  .SIGN.RSA.*       (optional with --allow-untrusted)
-  #    control segment     .PKGINFO (+ scripts)
-  #    data segment        the payload
-  #
-  # A single tar with .PKGINFO and the payload together is rejected by apk:
-  #   ERROR: <pkg>: archive does not contain expected data
-  # So the two segments are built separately and cat'ed.
-  CTRL="$WORK/apkctrl"
-  DATA="$WORK/apkdata"
-  mkdir -p "$CTRL" "$DATA/usr/bin"
-  cp "$SRC/ezhello" "$DATA/usr/bin/ezhello"
-  chmod 755 "$DATA/usr/bin/ezhello"
-  # The data segment has to be built FIRST: .PKGINFO must carry datahash, the
-  # sha256 of that segment. Without it apk says:
-  #   WARNING: Support for packages without datahash will be dropped in apk-tools 3.
-  #   ERROR: <pkg>: BAD archive
-  ( cd "$DATA" && tar -czf "$WORK/data.tar.gz" usr ) || fail "data segment"
-  DATAHASH=$(sha256sum "$WORK/data.tar.gz" | cut -d' ' -f1)
-  {
-    echo "pkgname = $PKGNAME"
-    echo "pkgver = $VER-r0"
-    echo "pkgdesc = easyblobs e2e"
-    echo "url = https://example.com"
-    echo "arch = x86_64"
-    echo "size = $(wc -c < "$SRC/ezhello")"
-    echo "origin = $PKGNAME"
-    echo "commit = e2e"
-    echo "license = Apache-2.0"
-    echo "datahash = $DATAHASH"
-  } > "$CTRL/.PKGINFO"
-  ( cd "$CTRL" && tar -czf "$WORK/ctrl.tar.gz" .PKGINFO ) || fail "control segment"
-  cat "$WORK/ctrl.tar.gz" "$WORK/data.tar.gz" > "$WORK/$PKGNAME-$VER-r0.apk" ||
-    fail "concatenate the .apk segments"
-  APK="$WORK/$PKGNAME-$VER-r0.apk"
+  # No fallback. A hand-built .apk was attempted twice and never passed
+  # apk-tools (first "archive does not contain expected data", then "BAD
+  # archive" once datahash was added). Carrying that code means every future
+  # failure has two possible causes and the log points at neither.
+  echo "apk: abuild produced no .apk - the hosted case cannot run." >&2
+  echo "apk: (alpine-sdk, which installs abuild, comes from the distro job)" >&2
+  tail -30 /tmp/abuild.log >&2 2>/dev/null || true
+  exit 1
 fi
 [ -s "$APK" ] || fail "no .apk produced"
-echo "   archive: $APK ($(wc -c < "$APK") bytes, ${HAND_BUILT:+HAND-BUILT}${HAND_BUILT:-from abuild})"
+echo "   archive: $APK ($(wc -c < "$APK") bytes, from abuild)"
 
 echo "== hosted: publish under _hosted/<repo>/ =="
 FN=$(basename "$APK")
@@ -233,20 +200,6 @@ else
   echo "apk: the hosted package could not be added:" >&2
   tail -15 /tmp/apk-h.log >&2
   tail -10 /tmp/apk-hi.log >&2
-  if [ -n "${HAND_BUILT:-}" ]; then
-    # The mirror did its part: APKINDEX listed the package and apk reached
-    # "Installing". What apk refused is the archive THIS SCRIPT built, because
-    # abuild was unavailable. That is a gap in the suite, not in the adapter, and
-    # saying so is more useful than a red job that reads like a mirror failure.
-    echo "apk: NOTE the mirror served the package and listed it in APKINDEX;" >&2
-    echo "apk: what apk rejected is the hand-built archive (abuild is not on" >&2
-    echo "apk: PATH in this image). The publish path itself was exercised:" >&2
-    echo "apk: PUT 201, generated APKINDEX, and apk resolved the package." >&2
-    echo "apk: hosted install NOT verified - abuild required for a valid .apk" >&2
-    echo "apk: OK (pull: index update add run)"
-    echo "apk: PARTIAL (hosted: publish + APKINDEX verified; install needs abuild)"
-    exit 0
-  fi
   fail "hosted add"
 fi
 

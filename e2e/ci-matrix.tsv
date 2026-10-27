@@ -73,13 +73,14 @@ swift	ubuntu-latest	hosted	swiftc via swift-actions/setup-swift	swift
 jenkins	ubuntu-latest	hosted	jenkins-plugin-cli (jar fetched in the job) + setup-java	java jenkins
 
 # --- distro package managers: these NEED their own userland ---
-apk	container:alpine:3.20	pull-only	apk(8) exists only on Alpine	
+apk	container:alpine:3.20	hosted	apk(8) exists only on Alpine	
 debian	container:debian:bookworm	hosted	apt tests THIS distro's archive layout	
 rpm	container:fedora:41	hosted	dnf tests THIS distro's repomd metadata	
 
 # --- protocols whose client is plain HTTP by nature ---
 netcache	ubuntu-latest	pull-only	curl IS the client (raw HTTP cache semantics)	
 oci	ubuntu-latest	hosted	wget speaks the OCI /v2 protocol (no docker daemon needed)	
+
 
 
 
