@@ -76,6 +76,10 @@ mkdir -p "$SRC/R"
   echo "Encoding: UTF-8"
 } > "$SRC/DESCRIPTION"
 printf '%s\n' 'greet <- function() "ez hello"' > "$SRC/R/greet.R"
+# R refuses to install a source package without a NAMESPACE file:
+#   ERROR: a 'NAMESPACE' file is required
+# It is what declares the exports; a package with none is not a package.
+printf '%s\n' 'export(greet)' > "$SRC/NAMESPACE"
 
 TGZ="$PKG"_"$VER".tar.gz
 ( cd "$WORK" && tar -czf "$TGZ" "$PKG" ) || fail "build the source package"
