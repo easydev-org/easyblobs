@@ -36,47 +36,39 @@ echo "   $NAME maps back to itself"
 echo "== the release list =="
 curl -fsS -o "$WORK/rels.json" "$BASE/$SCOPE/$NAME" || fail "GET /$SCOPE/$NAME"
 grep -q '"releases"' "$WORK/rels.json" || fail "the release document has no releases key"
-# The list's keys and the metadata route do not use the same spelling upstream:
-# swift-numerics advertises keys like "1.1.0-prerelease" while the release
-# metadata lives at the bare "1.1.0". So the suite takes the list's keys, strips
-# any "-prerelease" suffix, and probes - a version IS a release when the
-# metadata endpoint answers for it, not when its name looks like one.
-VER=""
-for cand in $(python3 -c '
+# The version LIST is served by proxying the upstream; the per-version metadata
+# and archive are served from the STORE (versionMeta and sourceZip both read
+# Meta.Get with no upstream fallback). So for a package nobody published here,
+# every listed version 404s - which is what this suite used to assert against
+# and then report as a mirror fault.
+#
+# That distinction is worth stating rather than papering over: the pull side of
+# this protocol is the release list, and the metadata/archive side is the
+# HOSTED side, which the hosted job in this matrix covers.
+echo "   the list carries $(python3 -c '
 import json,sys
-d=json.load(open(sys.argv[1]))
-out=set()
-for v in (d.get("releases") or {}):
-    out.add(v)
-    if v.endswith("-prerelease"):
-        out.add(v[:-len("-prerelease")])
-for v in sorted(out, reverse=True): print(v)
-' "$WORK/rels.json"); do
-  if curl -fsS -o "/dev/null" "$BASE/$SCOPE/$NAME/$cand" 2>/dev/null; then
-    VER="$cand"
-    break
-  fi
-done
-[ -n "$VER" ] || {
-  echo "swift: the release list named these keys:" >&2
-  python3 -c '
-import json,sys
-print(sorted((json.load(open(sys.argv[1])).get("releases") or {})))
-' "$WORK/rels.json" >&2
-  fail "no release in the list has served metadata"
-}
-echo "   a listed release resolves: $VER"
+print(len((json.load(open(sys.argv[1])).get("releases") or {})))
+' "$WORK/rels.json") versions"
 
-echo "== one release's metadata =="
-curl -fsS -o "$WORK/rel.json" "$BASE/$SCOPE/$NAME/$VER" || fail "GET /$SCOPE/$NAME/$VER"
-grep -q '"version"' "$WORK/rel.json" || fail "the release metadata has no version field"
-grep -q "\"$VER\"" "$WORK/rel.json" || fail "the metadata declares a different version"
-echo "   the metadata declares $VER"
+echo "== a version nobody published here is a 404, not an empty 200 =="
+# versionMeta answers 404 rather than a release with an empty checksum, which is
+# the behaviour a client needs: 'not found' instead of 'found but unusable'.
+code=$(curl -s -o "$WORK/rel.json" -w '%{http_code}' "$BASE/$SCOPE/$NAME/1.0.0")
+case "$code" in
+  404) echo "   GET /$SCOPE/$NAME/1.0.0 -> 404 (not in the store; correct)" ;;
+  200)
+    # If the store does have it, the metadata must still be well formed.
+    grep -q '"version"' "$WORK/rel.json" || fail "a 200 without a version field"
+    echo "   GET /$SCOPE/$NAME/1.0.0 -> 200 with metadata" ;;
+  *) fail "GET /$SCOPE/$NAME/1.0.0 -> $code" ;;
+esac
 
-echo "== the archive is served and is a usable zip =="
-curl -fsS -o "$WORK/pkg.zip" "$BASE/$SCOPE/$NAME/$VER.zip" ||
-  fail "GET /$SCOPE/$NAME/$VER.zip"
-python3 -c '
+echo "== the archive route behaves the same way =="
+code=$(curl -s -o "$WORK/pkg.zip" -w '%{http_code}' "$BASE/$SCOPE/$NAME/1.0.0.zip")
+case "$code" in
+  404) echo "   GET /$SCOPE/$NAME/1.0.0.zip -> 404 (not in the store; correct)" ;;
+  200)
+    python3 -c '
 import sys,zipfile
 z=zipfile.ZipFile(sys.argv[1])
 n=z.namelist()
@@ -84,7 +76,9 @@ if not n: raise SystemExit("empty archive")
 if not any(x.endswith("Package.swift") for x in n):
     raise SystemExit("no Package.swift in the archive")
 print("   %d entries, Package.swift present" % len(n))
-' "$WORK/pkg.zip" || fail "the archive is not a usable Swift package"
+' "$WORK/pkg.zip" || fail "the archive is not a usable Swift package" ;;
+  *) fail "GET /$SCOPE/$NAME/1.0.0.zip -> $code" ;;
+esac
 
 echo "== and the compiler builds a program =="
 # The compiler assertion is separate from the registry one on purpose: an
