@@ -1,34 +1,128 @@
 #!/bin/sh
-# Bazel Central Registry mirrored at the named target.
+# bazel: the Bazel Central Registry, mirrored at the named target.
 #
-# The REAL client is bazel: given a bzlmod project it fetches the module
-# metadata and the source archive from the registry, verifies the integrity
-# hash, and only then builds. A wget of metadata.json proves none of that.
-set -e
+# A BCR module is four files at a fixed layout, and each one matters:
+#
+#   /bazel_registry.json                       the registry's own descriptor
+#   /modules/<name>/metadata.json              every version the module has
+#   /modules/<name>/<ver>/MODULE.bazel         the module's dependency list
+#   /modules/<name>/<ver>/source.json          where the archive is + its hash
+#   /modules/<name>/<ver>/patches/<file>       patches the registry applies
+#
+# source.json is the one a mirror must get exactly right: it carries
+# "integrity", and bazel REFUSES the archive when the hash disagrees. A mirror
+# that served some other module's source.json would be caught by bazel rather
+# than by us - which is why the suite checks the file names the module it was
+# asked for, before bazel does.
+#
+# The REAL client is bazel: given a bzlmod project it resolves the graph through
+# the configured registry and verifies the archive. A wget of metadata.json
+# proves none of that, so both layers are asserted here.
+set -eu
 : "${EASYBLOBS_BASE:?EASYBLOBS_BASE not set}"
 
+BASE="${EASYBLOBS_BASE%/}"
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+cd "$WORK"
+
+fail() { echo "bazel: FAIL: $*" >&2; exit 1; }
+
+MOD="rules_go"
+VER="0.50.1"
+
+echo "== the registry descriptor =="
+curl -fsS -o "$WORK/reg.json" "$BASE/bazel_registry.json" ||
+  fail "GET /bazel_registry.json"
+echo "   $(wc -c < "$WORK/reg.json") bytes"
+
+echo "== the module's version list =="
+curl -fsS -o "$WORK/meta.json" "$BASE/modules/$MOD/metadata.json" ||
+  fail "GET modules/$MOD/metadata.json"
+grep -q "\"$VER\"" "$WORK/meta.json" || fail "metadata.json does not list $VER"
+grep -q '"versions"' "$WORK/meta.json" || fail "metadata.json has no versions key"
+echo "   metadata.json lists $VER"
+
+echo "== the module's own MODULE.bazel =="
+curl -fsS -o "$WORK/MODULE.bazel" "$BASE/modules/$MOD/$VER/MODULE.bazel" ||
+  fail "GET MODULE.bazel"
+grep -q "module(" "$WORK/MODULE.bazel" || fail "MODULE.bazel has no module() stanza"
+grep -q "name = \"$MOD\"" "$WORK/MODULE.bazel" ||
+  fail "MODULE.bazel does not declare name = $MOD"
+echo "   it declares name = $MOD"
+
+echo "== source.json names THIS module and carries an integrity hash =="
+curl -fsS -o "$WORK/source.json" "$BASE/modules/$MOD/$VER/source.json" ||
+  fail "GET source.json"
+grep -q '"integrity"' "$WORK/source.json" ||
+  fail "source.json has no integrity field; bazel cannot verify the archive"
+grep -q "$MOD" "$WORK/source.json" ||
+  fail "source.json does not name $MOD - the mirror served another module's file"
+echo "   integrity present, and the url names $MOD"
+
+echo "== patches, if the version declares any, are served =="
+# A version whose patches are missing is a module bazel cannot build.
+NPATCH=$(grep -o '"patches"' "$WORK/source.json" | wc -l)
+if [ "$NPATCH" -gt 0 ]; then
+  # Collect the patch file names from the patches map and fetch each one.
+  for p in $(python3 -c '
+import json,sys
+doc=json.load(open(sys.argv[1]))
+for k in (doc.get("patches") or {}): print(k)
+' "$WORK/source.json"); do
+    curl -fsS -o /dev/null "$BASE/modules/$MOD/$VER/patches/$p" ||
+      fail "source.json declares patch $p but it is not served"
+    echo "   patch $p is served"
+  done
+else
+  echo "   (this version declares no patches)"
+fi
+
+echo "== a module that does not exist stays a 404 =="
+# The failure mode a per-tree cache once had: one object answering for another.
+code=$(curl -s -o /dev/null -w '%{http_code}' \
+  "$BASE/modules/this_module_does_not_exist/metadata.json")
+case "$code" in
+  404) echo "   -> 404 (correct)" ;;
+  200) fail "a nonexistent module answered 200 - the mirror invented content" ;;
+  *) echo "   -> $code" ;;
+esac
+
+echo "== bazel resolves the graph through the mount =="
 command -v bazel >/dev/null || { echo "bazel: the bazel binary is missing"; exit 1; }
+W="${E2E_W:-$WORK/w}"
+mkdir -p "$W"
+cd "$W"
+{
+  echo "common --registry=$BASE"
+  echo "common --enable_bzlmod"
+} > .bazelrc
+printf '%s\n' \
+  'module(name = "e2e_bcr", version = "0.0.0")' \
+  "bazel_dep(name = \"$MOD\", version = \"$VER\")" > MODULE.bazel
+{
+  echo 'genrule('
+  echo '    name = "noop",'
+  echo '    outs = ["noop.txt"],'
+  echo '    cmd = "echo bcr-ok > $@",'
+  echo ')'
+} > BUILD.bazel
 
-rm -rf /w && mkdir -p ${E2E_W:-/w}
-cd ${E2E_W:-/w}
-cat > .bazelrc <<RC
-common --registry=$EASYBLOBS_BASE
-common --enable_bzlmod
-RC
-cat > MODULE.bazel <<'MOD'
-module(name = "e2e_bcr", version = "0.0.0")
-bazel_dep(name = "rules_go", version = "0.50.1")
-MOD
-cat > BUILD.bazel <<'B'
-genrule(
-    name = "noop",
-    outs = ["noop.txt"],
-    cmd = "echo bcr-ok > $@",
-)
-B
+if bazel mod graph >/tmp/bazel-graph.log 2>&1; then
+  grep -q "$MOD" /tmp/bazel-graph.log || fail "the resolved graph omits $MOD"
+  echo "   the graph contains $MOD"
+else
+  echo "bazel: bazel mod graph failed:" >&2
+  tail -25 /tmp/bazel-graph.log >&2
+  fail "bazel mod graph"
+fi
 
-# `bazel mod graph` resolves the dependency THROUGH the configured registry and
-# verifies the source archive's integrity; no build needed.
-bazel mod graph 2>&1 | tail -5
-bazel build //:noop 2>&1 | tail -3
-echo "bazel: bzlmod resolved rules_go 0.50.1 via the mirrored registry"
+if bazel build //:noop >/tmp/bazel-build.log 2>&1; then
+  echo "   the build succeeded"
+else
+  echo "bazel: bazel build failed:" >&2
+  tail -25 /tmp/bazel-build.log >&2
+  fail "bazel build"
+fi
+
+echo "bazel: OK (pull: registry-json metadata module-bazel source-json integrity patches 404 mod-graph build)"

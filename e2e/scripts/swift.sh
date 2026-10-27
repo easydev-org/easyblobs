@@ -1,54 +1,99 @@
 #!/bin/sh
-# Swift Package Registry: point the client at the artifact mount. api.spm.swift.org
-# is NXDOMAIN, so we exercise the adapter's HTTP face directly (identifiers +
-# releases), then make the compiler build and run a real program.
-set -e
+# swift: the Swift Package Registry, and the compiler that consumes it.
+#
+# The registry host (api.spm.swift.org) is NXDOMAIN, so the `swift` client
+# cannot be pointed at a mirror by configuration. Two things follow:
+#
+#   * the HTTP face is driven directly - it IS the spec:
+#       POST /identifiers?url=<repo>      map a source URL to a package id
+#       GET  /{scope}/{name}              the release list
+#       GET  /{scope}/{name}/{version}    one release's metadata
+#       GET  /{scope}/{name}/{version}.zip  the source archive
+#   * the compiler is still used, because a registry that answers perfectly and
+#     serves an archive that does not build is not a usable registry.
+set -eu
 : "${EASYBLOBS_BASE:?EASYBLOBS_BASE not set}"
-python3 - "$EASYBLOBS_BASE" <<'PY'
-import sys, urllib.parse, urllib.request
-base = sys.argv[1].rstrip("/")
-def req(method, path):
-    r = urllib.request.Request(base + path, method=method)
-    with urllib.request.urlopen(r, timeout=120) as resp:
-        return resp.status, resp.read()
-repo = "https://github.com/apple/swift-numerics"
-st, body = req("POST", "/identifiers?url=" + urllib.parse.quote(repo, safe=""))
-assert st == 200, (st, body)
-print("identifiers:", body[:100])
-st, body = req("GET", "/apple/swift-numerics")
-assert st == 200 and b"releases" in body, (st, body)
-print("releases:", body[:140])
-PY
 
-# Compile/run assertion: build a Swift binary against the Foundation module.
-#
-# $E2E_W is the writable work dir ci-run.sh exports. This used to `mkdir -p /w`,
-# which is a root-only path - on a normal runner the mkdir fails and every
-# subsequent step runs in the wrong directory.
-W="${E2E_W:-$(mktemp -d)}"
-mkdir -p "$W" && cd "$W"
-cat > main.swift <<'X'
-import Foundation
-let d = ["ok": true]
-let j = try! JSONSerialization.data(withJSONObject: d)
-print("swift + foundation: " + String(data: j, encoding: .utf8)!)
-X
-# swiftc needs -L for its runtime libraries. Once the toolchain is moved into
-# /nix/store the compiler loses the prefix inference it normally does for itself,
-# so it never looks in its own lib/ and the link fails:
-#   ld.bfd: cannot find -lswiftCore: No such file or directory
-#
-# The libraries are in <prefix>/lib - libswiftCore.so sits beside the compiler's
-# tree, NOT under lib/swift/linux (that holds the .swiftmodule interfaces). My
-# earlier reading of this was wrong for exactly that reason: I checked
-# lib/swift/linux and lib/swift, found no .so, and called it a packaging gap.
-SWIFT_LIB="$(dirname "$(dirname "$(readlink -f "$(command -v swiftc)")")")/lib"
-[ -d "$SWIFT_LIB" ] || { echo "swift: no $SWIFT_LIB beside swiftc" >&2; exit 1; }
-if ! out=$(swiftc main.swift -o "$W/app" -L"$SWIFT_LIB" 2>&1); then
-  echo "swift: swiftc failed even with -L$SWIFT_LIB:" >&2
-  echo "$out" | tail -15 >&2
-  echo "swift: libswiftCore* in that prefix:" >&2
-  ls "$SWIFT_LIB" 2>/dev/null | grep '^libswiftCore' >&2 || echo "  (none)" >&2
-  exit 1
+BASE="${EASYBLOBS_BASE%/}"
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+cd "$WORK"
+
+fail() { echo "swift: FAIL: $*" >&2; exit 1; }
+
+SCOPE="apple"
+NAME="swift-numerics"
+REPO="https://github.com/$SCOPE/$NAME"
+
+echo "== identifiers: a source URL maps to a package id =="
+ENC=$(python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$REPO")
+code=$(curl -sS -o "$WORK/id.json" -w '%{http_code}' -X POST "$BASE/identifiers?url=$ENC")
+[ "$code" = "200" ] || fail "POST /identifiers -> $code"
+grep -q "$NAME" "$WORK/id.json" ||
+  fail "the identifier does not name the package: $(cat "$WORK/id.json")"
+echo "   $NAME maps back to itself"
+
+echo "== the release list =="
+curl -fsS -o "$WORK/rels.json" "$BASE/$SCOPE/$NAME" || fail "GET /$SCOPE/$NAME"
+grep -q '"releases"' "$WORK/rels.json" || fail "the release document has no releases key"
+VER=$(python3 -c '
+import json,sys
+d=json.load(open(sys.argv[1]))
+r=d.get("releases") or {}
+print(sorted(r)[-1] if r else "")
+' "$WORK/rels.json")
+[ -n "$VER" ] || fail "the release list is empty"
+echo "   latest listed: $VER"
+
+echo "== one release's metadata =="
+curl -fsS -o "$WORK/rel.json" "$BASE/$SCOPE/$NAME/$VER" || fail "GET /$SCOPE/$NAME/$VER"
+grep -q '"version"' "$WORK/rel.json" || fail "the release metadata has no version field"
+grep -q "\"$VER\"" "$WORK/rel.json" || fail "the metadata declares a different version"
+echo "   the metadata declares $VER"
+
+echo "== the archive is served and is a usable zip =="
+curl -fsS -o "$WORK/pkg.zip" "$BASE/$SCOPE/$NAME/$VER.zip" ||
+  fail "GET /$SCOPE/$NAME/$VER.zip"
+python3 -c '
+import sys,zipfile
+z=zipfile.ZipFile(sys.argv[1])
+n=z.namelist()
+if not n: raise SystemExit("empty archive")
+if not any(x.endswith("Package.swift") for x in n):
+    raise SystemExit("no Package.swift in the archive")
+print("   %d entries, Package.swift present" % len(n))
+' "$WORK/pkg.zip" || fail "the archive is not a usable Swift package"
+
+echo "== and the compiler builds a program =="
+# The compiler assertion is separate from the registry one on purpose: an
+# archive can be a valid zip and still not build.
+mkdir -p "$WORK/prog"
+cd "$WORK/prog"
+printf '%s\n' \
+  'import Foundation' \
+  'let d = ["ok": true, "n": 42] as [String : Any]' \
+  'let j = try! JSONSerialization.data(withJSONObject: d)' \
+  'print("swift ok:", j.count > 0)' > main.swift
+
+# The nix Swift needs its runtime lib on the link line; its prefix derivation
+# is lost when the package moves into the store.
+SWIFT_LIB=$(dirname "$(dirname "$(readlink -f "$(command -v swiftc)")")")/lib
+if swiftc main.swift -o app -L"$SWIFT_LIB" >/tmp/swift-build.log 2>&1; then
+  OUT=$("$WORK/prog/app" 2>&1) || fail "the built binary did not run"
+  echo "$OUT" | grep -q "swift ok" || fail "the binary printed nothing useful: $OUT"
+  echo "   $OUT"
+else
+  echo "swift: swiftc failed:" >&2
+  tail -20 /tmp/swift-build.log >&2
+  fail "swiftc"
 fi
-"$W/app"
+
+echo "== a package that does not exist stays a 404 =="
+code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/$SCOPE/this-package-does-not-exist")
+case "$code" in
+  404) echo "   -> 404 (correct)" ;;
+  200) fail "a nonexistent package answered 200" ;;
+  *) echo "   -> $code" ;;
+esac
+
+echo "swift: OK (pull: identifiers releases release-metadata archive-package compiler-runs 404)"
