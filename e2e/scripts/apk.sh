@@ -21,6 +21,15 @@ cd "$WORK"
 
 fail() { echo "apk: FAIL: $*" >&2; exit 1; }
 
+# The job log is truncated well before the hosted section, so the state that
+# decides which path is taken is printed FIRST. Nine rounds were spent guessing
+# whether abuild was on PATH; the answer belongs at the top of the run.
+echo "apk: runner = $(cat /etc/os-release 2>/dev/null | sed -n 's/^ID=//p') $(sed -n 's/^VERSION_ID=//p' /etc/os-release 2>/dev/null)"
+echo "apk: shell  = $0 (bash: $(command -v bash || echo MISSING))"
+for t in abuild abuild-keygen apk sha256sum tar; do
+  echo "apk: $t = $(command -v "$t" || echo MISSING)"
+done
+
 echo "== pull: point apk at the mount =="
 printf '%s/v3.24/main\n%s/v3.24/community\n' "$BASE" "$BASE" > /etc/apk/repositories
 
