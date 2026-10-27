@@ -60,12 +60,20 @@ SRC="$WORK/apksrc"
 mkdir -p "$SRC"
 printf '%s\n' '#!/bin/sh' 'echo "ez hello"' > "$SRC/ezhello"
 chmod 755 "$SRC/ezhello"
+# An APKBUILD is a SHELL SCRIPT, not a .ini file. `pkgname = x` with spaces is a
+# command named "pkgname", which abuild reports as:
+#   APKBUILD: line 1: pkgname: not found
+# The assignments have no spaces around '='.
 printf '%s\n' \
-  "pkgname = $PKGNAME" \
-  "pkgver = $VER-r0" \
-  'pkgdesc = easyblobs e2e' \
-  'arch = x86_64' \
-  'license = Apache-2.0' \
+  "pkgname=$PKGNAME" \
+  "pkgver=$VER" \
+  "pkgrel=0" \
+  'pkgdesc="easyblobs e2e"' \
+  'url="https://example.com"' \
+  'arch="x86_64"' \
+  'license="Apache-2.0"' \
+  'source=""' \
+  '' \
   'package() {' \
   '  install -Dm755 "$srcdir/ezhello" "$pkgdir/usr/bin/ezhello"' \
   '}' > "$SRC/APKBUILD"
@@ -107,6 +115,7 @@ if command -v abuild >/dev/null 2>&1; then
       [ -n "$key" ] && echo "PACKAGER_PRIVKEY=\"$key\""
     } > "$HOME/.abuild/abuild.conf"
   fi
+  echo "   abuild.conf:"; cat "$HOME/.abuild/abuild.conf" | sed 's/^/     /'
   SRCDEST="$WORK/srcdest"
   mkdir -p "$SRCDEST"
   ( cd "$SRC" && tar -czf "$SRCDEST/$PKGNAME-$VER.tar.gz" ezhello ) ||
