@@ -152,7 +152,12 @@ chmod 755 "$SRC/ezhello"
   echo 'url="https://example.com"'
   echo 'license=("Apache-2.0")'
   echo 'options=(!strip !buildflags)'
-  echo 'source=()'
+  # source MUST list the file. makepkg copies only what is named there into
+  # $srcdir, so with source=() the package() step ran against an empty srcdir:
+  #   install: cannot stat '.../src/ezhello': No such file or directory
+  # A local file needs the "name::file" form so makepkg does not try to fetch it.
+  echo 'source=("ezhello")'
+  echo 'sha256sums=("SKIP")'
   echo 'package() {'
   echo '  install -Dm755 "$srcdir/ezhello" "$pkgdir/usr/bin/ezhello"'
   echo '}'
