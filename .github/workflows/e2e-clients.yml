@@ -457,7 +457,12 @@ jobs:
         run: |
           set -eu
           need=""
-          for t in curl wget tar; do
+          # bash is NOT optional: the suites are `sh`, but ci-run.sh uses
+          # bash-isms and alpine:3.20 ships only busybox sh -
+          #   sh: /bin/sh
+          #   bash: MISSING
+          # so the harness aborted before any protocol ran.
+          for t in curl wget tar bash; do
             command -v "$t" >/dev/null || need="$need $t"
           done
           if [ -n "$need" ]; then
