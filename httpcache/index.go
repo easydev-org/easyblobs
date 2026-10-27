@@ -36,8 +36,18 @@ func GenerateTreeIndex(store easyblobkit.HostedStore, tree string) easyblobkit.G
 			byName[f.Name] = f
 		}
 		sort.Strings(names)
-		out := map[string]easyblobkit.GeneratedFile{}
-		switch tree {
+	out := map[string]easyblobkit.GeneratedFile{}
+	// The CRAN/CPAN/luarocks indexes are derived from FILE NAMES alone. JSR is
+	// different: deno needs the bytes of every module to answer meta.json and
+	// <ver>_meta.json, so its documents are rendered separately and merged in.
+	if tree == "jsr" {
+		if jsrOut, err := generateJSR(ctx, store, files); err == nil {
+			for k, v := range jsrOut {
+				out[k] = v
+			}
+		}
+	}
+	switch tree {
 		case "cran":
 			body := cranPACKAGES(names)
 			out["src/contrib/PACKAGES"] = easyblobkit.GeneratedFile{Body: body, ContentType: "text/plain; charset=utf-8"}
