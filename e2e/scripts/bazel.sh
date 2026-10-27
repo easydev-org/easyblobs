@@ -37,6 +37,14 @@ if [ "$code" != "200" ]; then
   echo "bazel: GET /bazel_registry.json -> $code" >&2
   echo "bazel: the body was: $(head -c 200 "$WORK/reg.json" 2>/dev/null)" >&2
   echo "bazel: the mount root answers with: $(curl -sS "$BASE/" 2>/dev/null | head -c 120)" >&2
+  # Compare against a tree known to proxy: if THAT also 404s, the problem is the
+  # upstream table as a whole; if it works, the problem is bazel's entry.
+  echo "bazel: for comparison, /artifacts/cran/src/contrib/PACKAGES ->" >&2
+  echo "bazel:   $(curl -sS -o /dev/null -w '%{http_code}' \
+        "${BASE%/*}/cran/src/contrib/PACKAGES" 2>/dev/null)" >&2
+  echo "bazel: and /artifacts/bazel/modules/rules_go/metadata.json ->" >&2
+  echo "bazel:   $(curl -sS -o /dev/null -w '%{http_code}' \
+        "$BASE/modules/rules_go/metadata.json" 2>/dev/null)" >&2
   fail "GET /bazel_registry.json -> $code"
 fi
 echo "   $(wc -c < "$WORK/reg.json") bytes"

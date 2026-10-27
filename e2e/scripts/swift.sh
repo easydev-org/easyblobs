@@ -36,23 +36,35 @@ echo "   $NAME maps back to itself"
 echo "== the release list =="
 curl -fsS -o "$WORK/rels.json" "$BASE/$SCOPE/$NAME" || fail "GET /$SCOPE/$NAME"
 grep -q '"releases"' "$WORK/rels.json" || fail "the release document has no releases key"
-# Take a version the list ACTUALLY names and that the metadata endpoint
-# accepts. sorted()[-1] is a STRING sort - 1.0.2 sorts above 1.0.11 - so the
-# "largest" name is not necessarily a real release, and picking it produced a
-# 404 that looked like a mirror fault:
-#   GET /apple/swift-numerics/1.1.1 -> 404
+# The list's keys and the metadata route do not use the same spelling upstream:
+# swift-numerics advertises keys like "1.1.0-prerelease" while the release
+# metadata lives at the bare "1.1.0". So the suite takes the list's keys, strips
+# any "-prerelease" suffix, and probes - a version IS a release when the
+# metadata endpoint answers for it, not when its name looks like one.
 VER=""
 for cand in $(python3 -c '
 import json,sys
 d=json.load(open(sys.argv[1]))
-for v in sorted((d.get("releases") or {})): print(v)
+out=set()
+for v in (d.get("releases") or {}):
+    out.add(v)
+    if v.endswith("-prerelease"):
+        out.add(v[:-len("-prerelease")])
+for v in sorted(out, reverse=True): print(v)
 ' "$WORK/rels.json"); do
   if curl -fsS -o "/dev/null" "$BASE/$SCOPE/$NAME/$cand" 2>/dev/null; then
     VER="$cand"
     break
   fi
 done
-[ -n "$VER" ] || fail "no release in the list has served metadata"
+[ -n "$VER" ] || {
+  echo "swift: the release list named these keys:" >&2
+  python3 -c '
+import json,sys
+print(sorted((json.load(open(sys.argv[1])).get("releases") or {})))
+' "$WORK/rels.json" >&2
+  fail "no release in the list has served metadata"
+}
 echo "   a listed release resolves: $VER"
 
 echo "== one release's metadata =="
