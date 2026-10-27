@@ -75,7 +75,7 @@ printf '%s\n' \
   'source=""' \
   '' \
   'package() {' \
-  '  install -Dm755 "$srcdir/ezhello" "$pkgdir/usr/bin/ezhello"' \
+  '  install -Dm755 "$startdir/ezhello" "$pkgdir/usr/bin/ezhello"' \
   '}' > "$SRC/APKBUILD"
 
 APK=""
