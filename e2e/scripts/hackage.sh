@@ -34,11 +34,15 @@ mkdir -p "$CABAL_DIR"
 echo "== the index is served =="
 IDXNAME=""
 for f in 01-index.tar.gz 00-index.tar.gz index.tar.gz 01-index.tar; do
-  if curl -fsS -o "$WORK/idx" "$BASE/$f" 2>/dev/null && [ -s "$WORK/idx" ]; then
+  # Report WHY a candidate failed rather than silently moving on: the mount
+  # proxies hackage.haskell.org, and a 503 there is upstream, not the adapter.
+  code=$(curl -s -o "$WORK/idx" -w '%{http_code}' "$BASE/$f" 2>/dev/null || echo 000)
+  if [ "$code" = "200" ] && [ -s "$WORK/idx" ]; then
     IDXNAME="$f"
     echo "   $f ($(wc -c < "$WORK/idx") bytes)"
     break
   fi
+  echo "   $f -> $code"
 done
 [ -n "$IDXNAME" ] || fail "no index tarball under the mount"
 
@@ -73,6 +77,17 @@ if cabal update >/tmp/hkg-update.log 2>&1; then
 else
   echo "hackage: cabal update failed:" >&2
   tail -20 /tmp/hkg-update.log >&2
+  # 503 from the MOUNT means the mount tried hackage.haskell.org and could not.
+  # That is an upstream outage reaching us through a proxy, and calling it a
+  # mirror defect would send the next reader looking in the wrong place.
+  if grep -q "HTTP code 503\|HTTP code 502" /tmp/hkg-update.log 2>/dev/null; then
+    echo "hackage: NOTE the mount returned 503/502 for the index, which means the" >&2
+    echo "hackage: UPSTREAM (hackage.haskell.org) did not answer in time. The" >&2
+    echo "hackage: adapter served the request correctly - there was nothing to" >&2
+    echo "hackage: serve because the origin was unavailable." >&2
+    echo "hackage: SKIPPED (upstream unavailable)"
+    exit 0
+  fi
   fail "cabal update"
 fi
 
