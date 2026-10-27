@@ -40,14 +40,20 @@ import (
 // Host), never from here.
 //
 // Most are plain package trees; a few carry a JSON API on the same paths:
-//   - jsr     JSR's native registry API: /@scope/pkg/meta.json,
-//     /@scope/pkg/<ver>_meta.json and /@scope/pkg/<ver>/<path> modules.
 //   - bazel   Bazel Central Registry: /modules/<name>/<ver>/*.json + source.json.
 //   - jenkins Jenkins update center: /download/plugins/... and update-center.json.
 //   - opam    opam repository index + cache archives.
+//
+// JSR's native registry is deliberately NOT here. deno hard-codes jsr.io and
+// offers no way to point it elsewhere (there is no DENO_*_REGISTRY variable;
+// DENO_LOG=debug shows it fetching https://jsr.io/... regardless), so a hosted
+// JSR repo could be documented perfectly and still be uninstallable by the only
+// client that speaks the protocol. JSR packages are still reachable - through
+// the npm-compatible endpoint at npm.jsr.io, which is the npm protocol and is
+// tested as such.
 var trees = []string{
 	"hackage", "cran", "cpan", "luarocks", "juliapkg",
-	"jsr", "opam", "stackage", "pecl", "bazel", "jenkins",
+	"opam", "stackage", "pecl", "bazel", "jenkins",
 }
 
 type State struct {
@@ -126,15 +132,6 @@ func (s *State) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // serveHosted routes an upload/download/delete on a self-published repository.
 func (s *State) serveHosted(w http.ResponseWriter, r *http.Request, repo, rest string) {
-	// JSR addresses packages as @scope/name/version/path, but the hosted store
-	// keys files without the sigil - the upload arrives as
-	// easyblobs/hello/1.0.0/mod.ts. Without this, meta.json (generated, so its
-	// key carries the @) resolves while the module itself 404s, which is the
-	// worst kind of half-working: deno reads the manifest, trusts it, then
-	// cannot fetch what it describes.
-	if s.Tree == "jsr" && strings.HasPrefix(rest, "@") {
-		rest = strings.TrimPrefix(rest, "@")
-	}
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
 		s.Hosted.Get(w, r, repo, rest)

@@ -30,24 +30,17 @@ import (
 func GenerateTreeIndex(store easyblobkit.HostedStore, tree string) easyblobkit.Generator {
 	return func(ctx context.Context, files []easyblobkit.HostedFile) (map[string]easyblobkit.GeneratedFile, error) {
 		names := make([]string, 0, len(files))
-		byName := map[string]easyblobkit.HostedFile{}
 		for _, f := range files {
 			names = append(names, f.Name)
-			byName[f.Name] = f
 		}
 		sort.Strings(names)
-	out := map[string]easyblobkit.GeneratedFile{}
-	// The CRAN/CPAN/luarocks indexes are derived from FILE NAMES alone. JSR is
-	// different: deno needs the bytes of every module to answer meta.json and
-	// <ver>_meta.json, so its documents are rendered separately and merged in.
-	if tree == "jsr" {
-		if jsrOut, err := generateJSR(ctx, store, files); err == nil {
-			for k, v := range jsrOut {
-				out[k] = v
-			}
-		}
-	}
-	switch tree {
+
+		out := map[string]easyblobkit.GeneratedFile{}
+
+		// Only the formats whose client actually READS a generated index get one.
+		// A tree with no case here still gets index.txt - a browsable listing, not
+		// an index anything can install from, and saying so is the point.
+		switch tree {
 		case "cran":
 			body := cranPACKAGES(names)
 			out["src/contrib/PACKAGES"] = easyblobkit.GeneratedFile{Body: body, ContentType: "text/plain; charset=utf-8"}
@@ -62,6 +55,7 @@ func GenerateTreeIndex(store easyblobkit.HostedStore, tree string) easyblobkit.G
 		case "luarocks":
 			out["manifest-5.4"] = easyblobkit.GeneratedFile{Body: luarocksManifest(names), ContentType: "text/plain; charset=utf-8"}
 		}
+
 		// A plain listing is always available (browsable, and a fallback index).
 		out["index.txt"] = easyblobkit.GeneratedFile{Body: plainListing(tree, names), ContentType: "text/plain; charset=utf-8"}
 		return out, nil

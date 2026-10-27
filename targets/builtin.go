@@ -181,12 +181,17 @@ func Builtins() []Target {
 		{ID: "gitlfs", Protocol: "gitlfs", Kind: Identity, Hosts: []string{"github.com"}, Builtin: true},
 
 		// JSR's npm-compatibility registry: same coordinates as npm, so it
-		// shares the npm namespace. Declared before jsr so npm.jsr.io is not
-		// shadowed by jsr's bare-suffix match (first match wins).
+		// shares the npm namespace.
+		//
+		// This is the ONLY JSR entry point we serve. JSR's native registry
+		// (jsr.io) is not a target: deno hard-codes that host and has no
+		// variable to redirect it - DENO_LOG=debug shows it fetching
+		// https://jsr.io/... no matter what is set - so a mirror of the native
+		// protocol could be perfect and still be unusable by its only client.
+		// npm.jsr.io speaks the npm protocol, so it is served by the npm
+		// adapter like any other npm registry.
 		{ID: "npm.jsr", Protocol: "npm", Kind: Mirror, Base: "https://npm.jsr.io",
 			Hosts: []string{"npm.jsr.io"}, Builtin: true},
-		{ID: "jsr", Protocol: "jsr", Kind: Mirror, Base: "https://jsr.io",
-			Hosts: []string{"jsr.io"}, Builtin: true},
 
 		// Maven-layout mirrors. Each publishes the same coordinates under a
 		// host path prefix carried by its Base. They share the maven

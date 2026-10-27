@@ -38,8 +38,7 @@
 # --- application-level clients: installed with actions on ubuntu-latest ---
 
 npm	ubuntu-latest	hosted	npm via actions/setup-node	node
-jsrnpm	ubuntu-latest	pull-only	npm via actions/setup-node (JSR's npm-compatible packument)	node
-jsr	ubuntu-latest	hosted	deno via denoland/setup-deno	deno
+jsrnpm	ubuntu-latest	pull-only	deno via denoland/setup-deno (JSR packages through npm.jsr.io, the npm protocol)	deno
 pypi	ubuntu-latest	hosted	pip via actions/setup-python	python pip
 huggingface	ubuntu-latest	pull-only	pip + huggingface_hub (installed by the suite)	python pip
 conan	ubuntu-latest	hosted	conan via pip (installed in the job)	python conan
@@ -81,6 +80,7 @@ rpm	container:fedora:41	hosted	dnf tests THIS distro's repomd metadata
 # --- protocols whose client is plain HTTP by nature ---
 netcache	ubuntu-latest	pull-only	curl IS the client (raw HTTP cache semantics)	
 oci	ubuntu-latest	hosted	wget speaks the OCI /v2 protocol (no docker daemon needed)	
+
 
 
 
