@@ -41,11 +41,15 @@ echo "   meta + version meta + module all parse"
 
 echo "== pull: deno caches the package and RUNS it =="
 printf '%s\n' \
-  'import { flag } from "jsr:@luca/flag@1.0.1";' \
-  'console.log("flag type:", typeof flag);' > "$WORK/pull.ts"
+  'import { printProgress } from "jsr:@luca/flag@1.0.1";' \
+  'console.log("printProgress type:", typeof printProgress);' > "$WORK/pull.ts"
+# printProgress is the package's ONLY export - read off the real module.
+# Naming one it does not export fails at load time and reads like a registry
+# problem:
+#   The requested module does not provide an export named 'flag'
 if deno run -q "$WORK/pull.ts" >/tmp/jsr-pull.log 2>&1; then
   cat /tmp/jsr-pull.log | sed 's/^/   /'
-  grep -q "flag type" /tmp/jsr-pull.log || fail "deno ran but printed nothing"
+  grep -q "printProgress type" /tmp/jsr-pull.log || fail "deno ran but printed nothing"
 else
   echo "jsr: deno could not run the module through the mirror:" >&2
   tail -20 /tmp/jsr-pull.log >&2
