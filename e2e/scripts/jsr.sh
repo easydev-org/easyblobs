@@ -43,7 +43,7 @@ echo "== pull: deno caches the package and RUNS it =="
 printf '%s\n' \
   'import { flag } from "jsr:@luca/flag@1.0.1";' \
   'console.log("flag type:", typeof flag);' > "$WORK/pull.ts"
-if deno run --allow-none -q "$WORK/pull.ts" >/tmp/jsr-pull.log 2>&1; then
+if deno run -q "$WORK/pull.ts" >/tmp/jsr-pull.log 2>&1; then
   cat /tmp/jsr-pull.log | sed 's/^/   /'
   grep -q "flag type" /tmp/jsr-pull.log || fail "deno ran but printed nothing"
 else
@@ -121,7 +121,7 @@ printf '%s\n' \
   'console.log(greet());' > "$WORK/hosted.ts"
 
 if DENO_REGISTRY_URL="$BASE/_hosted/e2e" \
-   deno run --allow-none -q "$WORK/hosted.ts" >/tmp/jsr-hosted.log 2>&1; then
+   deno run -q "$WORK/hosted.ts" >/tmp/jsr-hosted.log 2>&1; then
   cat /tmp/jsr-hosted.log | sed 's/^/   /'
   grep -q "ez hello" /tmp/jsr-hosted.log ||
     fail "deno installed the package but its function did not run"
