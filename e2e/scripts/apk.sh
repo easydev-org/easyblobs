@@ -77,20 +77,35 @@ if command -v abuild >/dev/null 2>&1; then
   APK=$(find "$SRC" -name '*.apk' 2>/dev/null | head -1)
 fi
 if [ -z "$APK" ]; then
-  # A .apk is a gzipped tar of the payload plus .PKGINFO; build that directly.
-  ROOT="$WORK/apkroot"
-  mkdir -p "$ROOT/usr/bin"
-  cp "$SRC/ezhello" "$ROOT/usr/bin/ezhello"
+  # A .apk is NOT one tarball. It is up to three CONCATENATED gzipped tars:
+  #
+  #   [signature segment]  .SIGN.RSA.*       (optional with --allow-untrusted)
+  #    control segment     .PKGINFO (+ scripts)
+  #    data segment        the payload
+  #
+  # A single tar with .PKGINFO and the payload together is rejected by apk:
+  #   ERROR: <pkg>: archive does not contain expected data
+  # So the two segments are built separately and cat'ed.
+  CTRL="$WORK/apkctrl"
+  DATA="$WORK/apkdata"
+  mkdir -p "$CTRL" "$DATA/usr/bin"
+  cp "$SRC/ezhello" "$DATA/usr/bin/ezhello"
+  chmod 755 "$DATA/usr/bin/ezhello"
   {
     echo "pkgname = $PKGNAME"
     echo "pkgver = $VER-r0"
     echo "pkgdesc = easyblobs e2e"
+    echo "url = https://example.com"
     echo "arch = x86_64"
     echo "size = $(wc -c < "$SRC/ezhello")"
-    echo "datahash = 0"
-  } > "$ROOT/.PKGINFO"
-  ( cd "$ROOT" && tar -czf "$WORK/$PKGNAME-$VER-r0.apk" .PKGINFO usr ) ||
-    fail "build the .apk"
+    echo "origin = $PKGNAME"
+    echo "commit = e2e"
+    echo "license = Apache-2.0"
+  } > "$CTRL/.PKGINFO"
+  ( cd "$CTRL" && tar -czf "$WORK/ctrl.tar.gz" .PKGINFO ) || fail "control segment"
+  ( cd "$DATA" && tar -czf "$WORK/data.tar.gz" usr ) || fail "data segment"
+  cat "$WORK/ctrl.tar.gz" "$WORK/data.tar.gz" > "$WORK/$PKGNAME-$VER-r0.apk" ||
+    fail "concatenate the .apk segments"
   APK="$WORK/$PKGNAME-$VER-r0.apk"
 fi
 [ -s "$APK" ] || fail "no .apk produced"
