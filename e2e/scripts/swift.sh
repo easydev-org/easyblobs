@@ -36,14 +36,24 @@ echo "   $NAME maps back to itself"
 echo "== the release list =="
 curl -fsS -o "$WORK/rels.json" "$BASE/$SCOPE/$NAME" || fail "GET /$SCOPE/$NAME"
 grep -q '"releases"' "$WORK/rels.json" || fail "the release document has no releases key"
-VER=$(python3 -c '
+# Take a version the list ACTUALLY names and that the metadata endpoint
+# accepts. sorted()[-1] is a STRING sort - 1.0.2 sorts above 1.0.11 - so the
+# "largest" name is not necessarily a real release, and picking it produced a
+# 404 that looked like a mirror fault:
+#   GET /apple/swift-numerics/1.1.1 -> 404
+VER=""
+for cand in $(python3 -c '
 import json,sys
 d=json.load(open(sys.argv[1]))
-r=d.get("releases") or {}
-print(sorted(r)[-1] if r else "")
-' "$WORK/rels.json")
-[ -n "$VER" ] || fail "the release list is empty"
-echo "   latest listed: $VER"
+for v in sorted((d.get("releases") or {})): print(v)
+' "$WORK/rels.json"); do
+  if curl -fsS -o "/dev/null" "$BASE/$SCOPE/$NAME/$cand" 2>/dev/null; then
+    VER="$cand"
+    break
+  fi
+done
+[ -n "$VER" ] || fail "no release in the list has served metadata"
+echo "   a listed release resolves: $VER"
 
 echo "== one release's metadata =="
 curl -fsS -o "$WORK/rel.json" "$BASE/$SCOPE/$NAME/$VER" || fail "GET /$SCOPE/$NAME/$VER"

@@ -32,8 +32,13 @@ MOD="rules_go"
 VER="0.50.1"
 
 echo "== the registry descriptor =="
-curl -fsS -o "$WORK/reg.json" "$BASE/bazel_registry.json" ||
-  fail "GET /bazel_registry.json"
+code=$(curl -sS -o "$WORK/reg.json" -w '%{http_code}' "$BASE/bazel_registry.json")
+if [ "$code" != "200" ]; then
+  echo "bazel: GET /bazel_registry.json -> $code" >&2
+  echo "bazel: the body was: $(head -c 200 "$WORK/reg.json" 2>/dev/null)" >&2
+  echo "bazel: the mount root answers with: $(curl -sS "$BASE/" 2>/dev/null | head -c 120)" >&2
+  fail "GET /bazel_registry.json -> $code"
+fi
 echo "   $(wc -c < "$WORK/reg.json") bytes"
 
 echo "== the module's version list =="
