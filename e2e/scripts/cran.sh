@@ -42,15 +42,23 @@ done
 echo "== pull: install a package and USE it =="
 LIBS="$WORK/lib"
 mkdir -p "$LIBS"
-if Rscript -e "install.packages('jsonlite', lib='$LIBS', repos='$BASE', quiet=TRUE, dependencies=FALSE)" \
+# NOT quiet, and the assertion is the installed DIRECTORY, not the exit status.
+# This is the same trap the hosted half already fell into: install.packages
+# returns 0 while installing nothing, and quiet=TRUE means the only symptom is
+# the next line.
+if Rscript -e "install.packages('jsonlite', lib='$LIBS', repos='$BASE', dependencies=FALSE)" \
      >/tmp/cran-install.log 2>&1; then
+  if [ ! -d "$LIBS/jsonlite" ]; then
+    echo "cran: install.packages returned 0 but installed nothing:" >&2
+    tail -25 /tmp/cran-install.log >&2
+    fail "jsonlite was not installed"
+  fi
   echo "   installed"
 else
   echo "cran: install.packages failed:" >&2
-  tail -20 /tmp/cran-install.log >&2
+  tail -25 /tmp/cran-install.log >&2
   fail "install.packages"
 fi
-[ -d "$LIBS/jsonlite" ] || fail "jsonlite is not in the library"
 
 # Loading is not the same as working: call it.
 OUT=$(Rscript -e ".libPaths('$LIBS'); library(jsonlite); cat(toJSON(list(ok=TRUE), auto_unbox=TRUE))" 2>&1) ||
