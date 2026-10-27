@@ -134,8 +134,24 @@ func (s *State) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Range request is satisfied locally after the first fetch; these trees
 	// carry 100MB+ index files.
 	ct := mediaTypeOf(path)
-	res := s.Registry.FetchCachedPath(r.Context(), s.Tree, "tree", path, "/"+path, "",
-		easyblobkit.PathCachePolicy{MediaType: ct, BlobName: pathBase(path)})
+	// The stored version must distinguish queries too: FetchCachedPath keys the
+	// cache by (format, repo, version), so a shared version would let
+	// /rpc/v5/info?arg[]=a answer for ?arg[]=b on a cache hit.
+	ver := "tree"
+	if q := r.URL.RawQuery; q != "" {
+		ver = "tree?" + q
+	}
+	res := s.Registry.FetchCachedPath(r.Context(), s.Tree, "tree", ver, "/"+path, "",
+		easyblobkit.PathCachePolicy{
+			MediaType: ct,
+			BlobName:  pathBase(path),
+			// The query is part of the request, not decoration. AUR's RPC:
+			//   /rpc/v5/info?arg[]=<pkg>
+			// answers {"error":"No request type/data specified.","results":[]}
+			// when the selector is dropped, and that reads like an empty result
+			// rather than a lost parameter. The same applies to cgit's ?h=<ref>.
+			Query: r.URL.RawQuery,
+		})
 	if !res.OK {
 		easyblobkit.WriteCacheResultError(w, res)
 		return

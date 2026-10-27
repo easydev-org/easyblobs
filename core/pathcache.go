@@ -34,6 +34,16 @@ type PathCachePolicy struct {
 	// NoStore proxies without reading or writing the cache (a per-client
 	// credential must not be shared), matching netcache's NoStore.
 	NoStore bool
+	// Query is the request's raw query string, forwarded to the upstream URL
+	// and folded into the cache key.
+	//
+	// Without it an index that is selected BY query is cached under the bare
+	// path and the upstream sees no selector at all. AUR's RPC is exactly that:
+	//   /rpc/v5/info?arg[]=<pkg>
+	// and dropping the query made the upstream answer
+	//   {"error":"No request type/data specified.","resultcount":0,...}
+	// which reads like an empty result rather than a lost parameter.
+	Query string
 }
 
 // PathCacheResult is the outcome of FetchCachedPath.
@@ -121,7 +131,11 @@ func (r *Registry) FetchCachedPath(ctx context.Context, format, repo, version, p
 	// The key includes the storage identity too: the same path can name
 	// different objects in different repos/versions (conda channels, debian
 	// suites), and those must not collapse onto one result.
-	flight := flightKey(flightPathBlob, remote, path) + "\x00" + format + "\x00" + repo + "\x00" + version
+	// The QUERY is part of the identity: /rpc/v5/info?arg[]=a and ?arg[]=b are
+	// different objects at the same path, and collapsing them would serve one
+	// package's metadata for another.
+	flight := flightKey(flightPathBlob, remote, path) + "\x00" + format + "\x00" + repo +
+		"\x00" + version + "\x00" + pol.Query
 	v, _, _ := fetchGroup.Do(flight, func() (any, error) {
 		// Re-check inside the flight: a peer may have just refreshed the entry
 		// we found stale. Only a genuinely fresh entry short-circuits.
@@ -147,7 +161,14 @@ func (r *Registry) fetchCachedPathDirect(ctx context.Context, remote *Remote, fo
 	}
 	// Retrying GET (survives egress-proxy 502 flaps); follows redirects so a
 	// tree root may point at a regional mirror.
-	resp, err := remote.getStreamRetryCond(ctx, path, extra)
+	// The query travels with the path: a selector that lives in the query
+	// (?arg[]=<pkg>, ?h=<branch>) is the request, not decoration, and dropping
+	// it asks the upstream a DIFFERENT question.
+	upstreamPath := path
+	if pol.Query != "" {
+		upstreamPath = path + "?" + pol.Query
+	}
+	resp, err := remote.getStreamRetryCond(ctx, upstreamPath, extra)
 	if err != nil {
 		// A transport error (or a still-failing retryable status) is transient.
 		return pathCacheResult{transient: TransientUpstream(err)}, nil
