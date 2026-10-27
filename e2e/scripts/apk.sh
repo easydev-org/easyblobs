@@ -85,6 +85,14 @@ APK=""
 #   BAD archive                              (still, with datahash added)
 # That format has three concatenated segments and a signature chain; getting it
 # right by hand is guesswork, and the point of this suite is the MIRROR.
+echo "== hosted: which packager is available =="
+for t in abuild abuild-keygen; do
+  if command -v "$t" >/dev/null 2>&1; then
+    echo "   $t: $(command -v "$t")"
+  else
+    echo "   $t: MISSING"
+  fi
+done
 if command -v abuild >/dev/null 2>&1; then
   # abuild wants a source tarball named <pkgname>-<pkgver>.tar.gz in $SRCDEST,
   # and it refuses to run as root without -F.
