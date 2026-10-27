@@ -142,6 +142,17 @@ printf '%s\n' \
   "import { greet } from \"jsr:@$SCOPE/$PKG@$VER\";" \
   'console.log(greet());' > "$WORK/hosted.ts"
 
+# The server logs every request (EASYBLOBS_DEBUG=1 in the job). Snapshot the
+# log's line count before deno runs, then print what deno actually asked for:
+# "package not found" from deno, with every mirror-side assertion passing, means
+# it asked for a URL the mount does not answer - and the only way to know which
+# is to look.
+SRVLOG=/tmp/easyblobs.log
+before=0
+if [ -f "$SRVLOG" ]; then
+  before=$(wc -l < "$SRVLOG")
+fi
+
 if DENO_REGISTRY_URL="$BASE/_hosted/e2e" \
    deno run -q "$WORK/hosted.ts" >/tmp/jsr-hosted.log 2>&1; then
   cat /tmp/jsr-hosted.log | sed 's/^/   /'
@@ -151,6 +162,12 @@ if DENO_REGISTRY_URL="$BASE/_hosted/e2e" \
 else
   echo "jsr: deno could not install from the hosted repo:" >&2
   tail -25 /tmp/jsr-hosted.log >&2
+  # What did deno actually request? The server saw it.
+  if [ -f "$SRVLOG" ]; then
+    echo "jsr: requests the server received while deno ran:" >&2
+    tail -n +$((before + 1)) "$SRVLOG" | grep -iE '_hosted|jsr' | tail -25 >&2 ||
+      echo "   (none mentioned _hosted or jsr)" >&2
+  fi
   fail "deno run (hosted)"
 fi
 
