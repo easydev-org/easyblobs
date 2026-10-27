@@ -137,12 +137,20 @@ if command -v abuild >/dev/null 2>&1; then
   mkdir -p "$SRCDEST"
   ( cd "$SRC" && tar -czf "$SRCDEST/$PKGNAME-$VER.tar.gz" ezhello ) ||
     fail "tar the abuild source"
-  ( cd "$SRC" && PKGDEST="$WORK/pkgs" abuild -F -r checksum >/tmp/abuild1.log 2>&1 ) || true
-  ( cd "$SRC" && PKGDEST="$WORK/pkgs" abuild -F -r >/tmp/abuild.log 2>&1 ) || {
+  # REPODEST pins where abuild writes the package. Without it abuild derives a
+  # repository name from the CURRENT DIRECTORY, which here is a mktemp dir:
+  #   Updating the tmp.hbLGcE/x86_64 repository index...
+  # so the .apk landed in $HOME/packages/tmp.hbLGcE/x86_64/ - built correctly,
+  # and invisible to a find that only looked under $WORK.
+  mkdir -p "$WORK/pkgs"
+  ( cd "$SRC" && REPODEST="$WORK/pkgs" abuild -F -r checksum >/tmp/abuild1.log 2>&1 ) || true
+  ( cd "$SRC" && REPODEST="$WORK/pkgs" abuild -F -r >/tmp/abuild.log 2>&1 ) || {
     echo "apk: abuild failed:" >&2
     tail -25 /tmp/abuild.log >&2
     exit 1; }
-  APK=$(find "$WORK/pkgs" "$SRC" -name '*.apk' 2>/dev/null | head -1)
+  # REPODEST plus a search that also covers abuild's own default, because a
+  # silent zero-result here cost two rounds.
+  APK=$(find "$WORK/pkgs" "$SRC" "$HOME/packages" -name '*.apk' 2>/dev/null | head -1)
   echo "   abuild produced: ${APK:-<nothing>}"
   if [ -n "$APK" ]; then
     # A signed .apk is three concatenated gzipped tars. Say which segments it has
