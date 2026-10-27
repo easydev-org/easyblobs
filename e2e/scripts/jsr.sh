@@ -87,8 +87,26 @@ for f in deno.json mod.ts README.md; do
 done
 
 echo "== hosted: the GENERATED meta.json lists the version =="
-curl -fsS -o "$WORK/hmeta.json" "$BASE/_hosted/e2e/@$SCOPE/$PKG/meta.json" ||
-  fail "the generated meta.json is not served"
+# deno addresses JSR packages as @scope/name. The hosted store keys files
+# without the sigil, so BOTH forms are probed here and whichever answers is
+# recorded - a mismatch between them is exactly the bug this caught last round
+# (meta.json resolved, the module it described did not).
+get_first() {
+  # get_first <out> <path...>: fetch the first path that answers 200.
+  _out="$1"; shift
+  for _p in "$@"; do
+    _code=$(curl -s -o "$_out" -w '%{http_code}' "$BASE/_hosted/e2e/$_p" 2>/dev/null || echo 000)
+    if [ "$_code" = "200" ]; then
+      echo "   $_p -> 200"
+      echo "$_p" > "$WORK/lastpath"
+      return 0
+    fi
+    echo "   $_p -> $_code"
+  done
+  return 1
+}
+get_first "$WORK/hmeta.json" "@$SCOPE/$PKG/meta.json" "$SCOPE/$PKG/meta.json" ||
+  fail "the generated meta.json answers at neither path form"
 cat "$WORK/hmeta.json" | sed 's/^/   /'
 grep -q "\"$VER\"" "$WORK/hmeta.json" ||
   fail "meta.json does not list $VER"
@@ -96,8 +114,8 @@ grep -q "\"scope\": \"$SCOPE\"" "$WORK/hmeta.json" ||
   fail "meta.json has the wrong scope"
 
 echo "== hosted: the GENERATED _meta.json carries a real checksum =="
-curl -fsS -o "$WORK/hvmeta.json" "$BASE/_hosted/e2e/@$SCOPE/$PKG/${VER}_meta.json" ||
-  fail "the generated ${VER}_meta.json is not served"
+get_first "$WORK/hvmeta.json" "@$SCOPE/$PKG/${VER}_meta.json" "$SCOPE/$PKG/${VER}_meta.json" ||
+  fail "the generated ${VER}_meta.json answers at neither path form"
 grep -q '"manifest"' "$WORK/hvmeta.json" || fail "_meta.json has no manifest"
 # The checksum deno verifies must be the sha256 of the bytes we uploaded.
 MODSUM=$(sha256sum "$WORK/pkg/mod.ts" | cut -d' ' -f1)
@@ -110,8 +128,8 @@ grep -q '"exports"' "$WORK/hvmeta.json" || fail "_meta.json has no exports map"
 grep -q '"moduleGraph1"' "$WORK/hvmeta.json" || fail "_meta.json has no moduleGraph1"
 
 echo "== hosted: the module bytes are served =="
-curl -fsS -o "$WORK/hmod.ts" "$BASE/_hosted/e2e/@$SCOPE/$PKG/$VER/mod.ts" ||
-  fail "the module is not served"
+get_first "$WORK/hmod.ts" "@$SCOPE/$PKG/$VER/mod.ts" "$SCOPE/$PKG/$VER/mod.ts" ||
+  fail "the module answers at neither path form"
 cmp -s "$WORK/hmod.ts" "$WORK/pkg/mod.ts" || fail "the served module differs"
 echo "   bytes match"
 
