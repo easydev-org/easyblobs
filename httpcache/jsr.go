@@ -243,9 +243,12 @@ func generateJSR(ctx context.Context, store easyblobkit.HostedStore,
 		versions[base] = append(versions[base], pg.Version)
 	}
 
+	// Keys are WITHOUT the leading "@": serveHosted strips the sigil before
+	// looking a path up, so a "@scope/..." key here would never be found and
+	// meta.json would 404 while its own manifest was still reachable.
 	out := map[string]easyblobkit.GeneratedFile{}
 	for _, pg := range pkgs {
-		key := "@" + pg.Scope + "/" + pg.Name
+		key := pg.Scope + "/" + pg.Name
 		out[key+"/"+pg.Version+"_meta.json"] = easyblobkit.GeneratedFile{
 			Body:        jsrVersionMeta(pg),
 			ContentType: "application/json",
@@ -256,7 +259,7 @@ func generateJSR(ctx context.Context, store easyblobkit.HostedStore,
 		if len(parts) != 2 {
 			continue
 		}
-		out["@"+base+"/meta.json"] = easyblobkit.GeneratedFile{
+		out[base+"/meta.json"] = easyblobkit.GeneratedFile{
 			Body:        jsrMeta(parts[0], parts[1], vs),
 			ContentType: "application/json",
 		}

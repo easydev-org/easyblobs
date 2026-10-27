@@ -126,6 +126,15 @@ func (s *State) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // serveHosted routes an upload/download/delete on a self-published repository.
 func (s *State) serveHosted(w http.ResponseWriter, r *http.Request, repo, rest string) {
+	// JSR addresses packages as @scope/name/version/path, but the hosted store
+	// keys files without the sigil - the upload arrives as
+	// easyblobs/hello/1.0.0/mod.ts. Without this, meta.json (generated, so its
+	// key carries the @) resolves while the module itself 404s, which is the
+	// worst kind of half-working: deno reads the manifest, trusts it, then
+	// cannot fetch what it describes.
+	if s.Tree == "jsr" && strings.HasPrefix(rest, "@") {
+		rest = strings.TrimPrefix(rest, "@")
+	}
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
 		s.Hosted.Get(w, r, repo, rest)
