@@ -181,11 +181,24 @@ $RUNAS "cd '$SRC' && PKGDEST='$WORK/pkgs' SRCDEST='$SRC' BUILDDIR='$WORK/build' 
   echo "arch: makepkg failed:" >&2
   tail -30 /tmp/makepkg.log >&2
   exit 1; }
-FN=$(basename "$(find "$WORK/pkgs" -name '*.pkg.tar.zst' | head -1)")
-[ -n "$FN" ] || fail "makepkg produced no package"
-mv "$WORK/pkgs/$FN" "$WORK/$FN" 2>/dev/null || true
+BUILT=$(find "$WORK/pkgs" -name '*.pkg.tar.zst' | head -1)
+[ -n "$BUILT" ] || {
+  echo "arch: makepkg reported success but left no package in $WORK/pkgs:" >&2
+  find "$WORK" -name '*.pkg.tar.zst' >&2
+  tail -20 /tmp/makepkg.log >&2
+  exit 1; }
+FN=$(basename "$BUILT")
+# A silent `mv ... || true` here would leave $WORK/$FN naming whatever was there
+# before - the hand-built archive an earlier round produced - and the install
+# would then fail on a file this run never created.
+mv "$BUILT" "$WORK/$FN" || fail "could not move the package into place"
 [ -s "$WORK/$FN" ] || fail "no package produced"
 echo "   built $FN ($(wc -c < "$WORK/$FN") bytes)"
+# What did makepkg actually produce? When pacman calls a package corrupted, the
+# member list is the first thing to look at: a package without .MTREE or
+# .PKGINFO is structurally wrong however valid the payload is.
+echo "   members:"
+zstd -dc "$WORK/$FN" 2>/dev/null | tar -tf - 2>/dev/null | head -10 | sed 's/^/     /'
 
 echo "== hosted: publish it under <repo>/os/<arch>/ =="
 REPO="e2e"
