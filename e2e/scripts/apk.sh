@@ -71,12 +71,39 @@ printf '%s\n' \
   '}' > "$SRC/APKBUILD"
 
 APK=""
+# abuild is the reference implementation and the job installs alpine-sdk, so use
+# it. A hand-rolled .apk was tried first and never got past apk-tools:
+#   archive does not contain expected data   (one tarball instead of segments)
+#   BAD archive                              (still, with datahash added)
+# That format has three concatenated segments and a signature chain; getting it
+# right by hand is guesswork, and the point of this suite is the MIRROR.
 if command -v abuild >/dev/null 2>&1; then
-  ( cd "$SRC" && abuild -F checksum >/dev/null 2>&1 || true;
-    cd "$SRC" && abuild -F >/tmp/abuild.log 2>&1 ) || true
-  APK=$(find "$SRC" -name '*.apk' 2>/dev/null | head -1)
+  # abuild wants a source tarball named <pkgname>-<pkgver>.tar.gz in $SRCDEST,
+  # and it refuses to run as root without -F.
+  #
+  # It also signs with a private key in ~/.abuild, so one is generated first:
+  # without it abuild stops at "No private key found".
+  if [ ! -f "$HOME/.abuild/abuild.conf" ]; then
+    mkdir -p "$HOME/.abuild"
+    # -n '' means no passphrase: this key signs a throwaway test package.
+    abuild-keygen -a -i -n >/tmp/abuild-key.log 2>&1 || {
+      echo "apk: abuild-keygen failed:" >&2
+      tail -10 /tmp/abuild-key.log >&2
+      exit 1; }
+  fi
+  SRCDEST="$WORK/srcdest"
+  mkdir -p "$SRCDEST"
+  ( cd "$SRC" && tar -czf "$SRCDEST/$PKGNAME-$VER.tar.gz" ezhello ) ||
+    fail "tar the abuild source"
+  ( cd "$SRC" && PKGDEST="$WORK/pkgs" abuild -F -r checksum >/tmp/abuild1.log 2>&1 ) || true
+  ( cd "$SRC" && PKGDEST="$WORK/pkgs" abuild -F -r >/tmp/abuild.log 2>&1 ) || {
+    echo "apk: abuild failed:" >&2
+    tail -25 /tmp/abuild.log >&2
+    exit 1; }
+  APK=$(find "$WORK/pkgs" "$SRC" -name '*.apk' 2>/dev/null | head -1)
 fi
 if [ -z "$APK" ]; then
+  echo "apk: abuild is not available; falling back to building the segments by hand" >&2
   # A .apk is NOT one tarball. It is up to three CONCATENATED gzipped tars:
   #
   #   [signature segment]  .SIGN.RSA.*       (optional with --allow-untrusted)
