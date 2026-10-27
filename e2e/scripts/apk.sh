@@ -126,6 +126,16 @@ if command -v abuild >/dev/null 2>&1; then
     tail -25 /tmp/abuild.log >&2
     exit 1; }
   APK=$(find "$WORK/pkgs" "$SRC" -name '*.apk' 2>/dev/null | head -1)
+  echo "   abuild produced: ${APK:-<nothing>}"
+  if [ -n "$APK" ]; then
+    # A signed .apk is three concatenated gzipped tars. Say which segments it has
+    # so a future BAD archive can be traced to the archive rather than guessed at.
+    echo "   segments: $(gzip -l "$APK" 2>/dev/null | wc -l) gzip members hint"
+    tar -tzf "$APK" 2>/dev/null | head -5 | sed 's/^/     /'
+    # The public key must be where apk looks, or --allow-untrusted still fails the
+    # signature check on a signed package.
+    ls /etc/apk/keys/ 2>/dev/null | sed 's/^/     key: /'
+  fi
 fi
 if [ -z "$APK" ]; then
   echo "apk: abuild is not available; falling back to building the segments by hand" >&2
