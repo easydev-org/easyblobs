@@ -31,16 +31,32 @@ PKG="yay"
 echo "== the RPC info endpoint is served =="
 curl -fsS -o "$WORK/info.json" "$BASE/rpc/v5/info?arg[]=$PKG" ||
   fail "GET /rpc/v5/info?arg[]=$PKG"
-grep -q '"results"' "$WORK/info.json" || fail "the RPC reply has no results key"
-grep -q "\"Name\":\"$PKG\"" "$WORK/info.json" ||
-  fail "the RPC reply does not name $PKG"
+# Parsed with python3, not grepped: the JSON has no spaces ('"Name":"yay"'), and
+# a shell-level grep for that had its quotes eaten and matched nothing - which
+# reported a perfectly good reply as wrong.
+python3 - "$WORK/info.json" "$PKG" <<'PYEOF' || fail "the RPC reply is not usable"
+import json, sys
+doc = json.load(open(sys.argv[1]))
+want = sys.argv[2]
+if "results" not in doc:
+    raise SystemExit("no results key")
+names = [r.get("Name") for r in doc["results"]]
+if want not in names:
+    raise SystemExit("named %r, want %r" % (names, want))
+PYEOF
 echo "   $PKG metadata: $(wc -c < "$WORK/info.json") bytes"
 
 echo "== the RPC search endpoint is served =="
 if curl -fsS -o "$WORK/search.json" "$BASE/rpc/v5/search/$PKG" 2>/dev/null &&
    [ -s "$WORK/search.json" ]; then
-  grep -q '"results"' "$WORK/search.json" || fail "the search reply has no results"
-  echo "   search returns $(grep -o '"Name"' "$WORK/search.json" | wc -l) entries"
+  N=$(python3 - "$WORK/search.json" <<'PYEOF'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+print(len(doc.get("results") or []))
+PYEOF
+)
+  [ "$N" -gt 0 ] || fail "the search reply has no results"
+  echo "   search returns $N entries"
 else
   echo "   (search did not answer; info above is the assertion)"
 fi
