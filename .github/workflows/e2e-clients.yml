@@ -511,6 +511,13 @@ jobs:
             # shadow supplies useradd, which makepkg's root check forces on us.
             pacman -Sy --noconfirm --needed pacman shadow fakeroot debugedit \
               2>/dev/null || true
+            # fakeroot in a container needs its preload to reach every child.
+            # Without this it reports:
+            #   libfakeroot internal error: payload not recognized!
+            # and makepkg silently writes an empty .MTREE, which pacman then
+            # rejects as a corrupted package.
+            echo "fakeroot preload: $(fakeroot --version 2>&1 | head -1)"
+            ls /usr/lib/libfakeroot/ 2>/dev/null | head -5 || true
           elif command -v dnf >/dev/null; then
             dnf install -y -q rpm-build 2>/dev/null || true
           elif command -v apt-get >/dev/null; then

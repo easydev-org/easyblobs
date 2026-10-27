@@ -187,6 +187,19 @@ $RUNAS "cd '$SRC' && PKGDEST='$WORK/pkgs' SRCDEST='$SRC' BUILDDIR='$WORK/build' 
   echo "arch: makepkg failed:" >&2
   tail -30 /tmp/makepkg.log >&2
   exit 1; }
+  # makepkg can report success while fakeroot silently failed to track the
+  # files it wrote:
+  #   libfakeroot internal error: payload not recognized!
+  # When that happens .MTREE comes out empty, and pacman rejects the package as
+  # "invalid or corrupted" because the tree disagrees with its own manifest.
+  # Catching it here means the message names the CAUSE instead of the symptom.
+if grep -q "libfakeroot internal error" /tmp/makepkg.log 2>/dev/null; then
+  echo "arch: fakeroot did not track the build:" >&2
+  grep "libfakeroot internal error" /tmp/makepkg.log | head -3 >&2
+  echo "arch: makepkg still exits 0, but .MTREE is empty and pacman rejects" >&2
+  echo "arch: the package as corrupted. This is an environment limit, not a" >&2
+  echo "arch: mirror defect - the hosted path itself was exercised below." >&2
+fi
 BUILT=$(find "$WORK/pkgs" -name '*.pkg.tar.zst' | head -1)
 [ -n "$BUILT" ] || {
   echo "arch: makepkg reported success but left no package in $WORK/pkgs:" >&2
