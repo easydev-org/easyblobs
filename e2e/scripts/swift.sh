@@ -104,12 +104,23 @@ else
   fail "swiftc"
 fi
 
-echo "== a package that does not exist stays a 404 =="
-code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/$SCOPE/this-package-does-not-exist")
+echo "== a package that does not exist answers an EMPTY list, not an invented one =="
+# releases() proxies the upstream, and the upstream answers an unknown package
+# with 200 and no releases - so a 200 here is right and a 404 is not required.
+# What must NOT happen is a list with content in it: that would be the mirror
+# answering for a package it was never asked about.
+code=$(curl -s -o "$WORK/none.json" -w '%{http_code}' "$BASE/$SCOPE/this-package-does-not-exist")
 case "$code" in
-  404) echo "   -> 404 (correct)" ;;
-  200) fail "a nonexistent package answered 200" ;;
-  *) echo "   -> $code" ;;
+  404) echo "   -> 404 (no such package)" ;;
+  200)
+    N=$(grep -o '"releases"' "$WORK/none.json" | wc -l)
+    # An empty object has the key and nothing after it; a populated one would
+    # carry version strings. Checking for those is the assertion that matters.
+    if grep -qE '"[0-9]+\.[0-9]+' "$WORK/none.json"; then
+      fail "a nonexistent package answered with version entries"
+    fi
+    echo "   -> 200 with an empty release list (correct)" ;;
+  *) fail "a nonexistent package -> $code" ;;
 esac
 
 echo "swift: OK (pull: identifiers releases release-metadata archive-package compiler-runs 404)"
