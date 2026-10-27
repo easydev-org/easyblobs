@@ -39,10 +39,11 @@ import json, sys
 doc = json.load(open(sys.argv[1]))
 want = sys.argv[2]
 if "results" not in doc:
-    raise SystemExit("no results key")
+    raise SystemExit("no results key; reply was %.200r" % open(sys.argv[1]).read())
 names = [r.get("Name") for r in doc["results"]]
 if want not in names:
-    raise SystemExit("named %r, want %r" % (names, want))
+    raise SystemExit("named %r, want %r; reply was %.400r"
+                     % (names, want, open(sys.argv[1]).read()))
 PYEOF
 echo "   $PKG metadata: $(wc -c < "$WORK/info.json") bytes"
 
