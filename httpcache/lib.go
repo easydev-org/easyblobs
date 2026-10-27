@@ -134,12 +134,22 @@ func (s *State) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Range request is satisfied locally after the first fetch; these trees
 	// carry 100MB+ index files.
 	ct := mediaTypeOf(path)
-	// The stored version must distinguish queries too: FetchCachedPath keys the
-	// cache by (format, repo, version), so a shared version would let
-	// /rpc/v5/info?arg[]=a answer for ?arg[]=b on a cache hit.
-	ver := "tree"
+	// The stored version is the PATH ITSELF (plus any query).
+	//
+	// FetchCachedPath keys the cache by (format, repo, version) and ignores the
+	// path when reading, so a constant version makes every file in a tree share
+	// one cache entry: the first object fetched answers for all the rest. That
+	// is exactly what happened when this said "tree":
+	//
+	//   trying URL '<mount>/src/contrib/jsonlite_2.0.0.tar.gz'
+	//   Content type 'application/gzip' length 7414716 bytes
+	//   Error in getOctD(x, offset, len) : invalid octal digit
+	//
+	// 7414716 bytes is the size of src/contrib/PACKAGES, the file fetched a
+	// moment earlier - the package request was served the index's bytes.
+	ver := path
 	if q := r.URL.RawQuery; q != "" {
-		ver = "tree?" + q
+		ver = path + "?" + q
 	}
 	res := s.Registry.FetchCachedPath(r.Context(), s.Tree, "tree", ver, "/"+path, "",
 		easyblobkit.PathCachePolicy{
