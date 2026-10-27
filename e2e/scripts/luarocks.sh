@@ -118,3 +118,48 @@ echo "$out" | tail -5
   [ -n "$(find /tmp/lr-tree -iname '*luafilesystem*' 2>/dev/null)" ] || {
     echo "luarocks: luafilesystem not installed"; exit 1; }
 echo "luarocks: luafilesystem installed"
+
+# ------------------------------------------------------------------ hosted --
+# httpcache serves this tree through a HostedHandler, so files publish to
+# _hosted/<repo>/. This tree HAS a Generator, so a real index is synthesised from
+# what was uploaded; the listing check below is the same one a client reads.
+echo "== hosted: publish a file =="
+REPO="e2e"
+FN="e2e-1.0-1.src.rock"
+printf 'ez hello luarocks hosted\n' > "/tmp/$FN"
+SUM=$(sha256sum "/tmp/$FN" | cut -d' ' -f1)
+code=$(curl -sS -o /tmp/hosted-up.out -w '%{http_code}' -X PUT \
+  --data-binary "@/tmp/$FN" "$BASE/_hosted/$REPO/$FN")
+case "$code" in
+  200|201) echo "   PUT $FN -> $code" ;;
+  *) echo "luarocks: the upload failed:" >&2
+     cat /tmp/hosted-up.out >&2 || true
+     exit 1 ;;
+esac
+
+echo "== hosted: it comes back byte-identically =="
+curl -fsS -o "/tmp/$FN.back" "$BASE/_hosted/$REPO/$FN" ||
+  { echo "luarocks: the uploaded file is not served back" >&2; exit 1; }
+GOT=$(sha256sum "/tmp/$FN.back" | cut -d' ' -f1)
+[ "$GOT" = "$SUM" ] ||
+  { echo "luarocks: served bytes differ ($GOT != $SUM)" >&2; exit 1; }
+echo "   sha256 $SUM matches"
+
+echo "== hosted: the repo has a listing =="
+curl -fsS "$BASE/_hosted/$REPO/index.txt" 2>/dev/null | grep -q "$FN" ||
+  { echo "luarocks: index.txt does not list $FN" >&2; exit 1; }
+echo "   index.txt lists $FN"
+
+echo "== hosted: DELETE removes it =="
+code=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$BASE/_hosted/$REPO/$FN")
+case "$code" in
+  200|204)
+    if curl -fsS "$BASE/_hosted/$REPO/$FN" >/dev/null 2>&1; then
+      echo "luarocks: the deleted file is still served" >&2; exit 1
+    fi
+    echo "   gone" ;;
+  *) echo "   (DELETE answered $code)" ;;
+esac
+
+echo "luarocks: OK (pull: upstream)"
+echo "luarocks: OK (hosted: put bytes index-txt delete)"

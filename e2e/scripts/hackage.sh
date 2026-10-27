@@ -105,3 +105,50 @@ if [ -n "$SDNAME" ]; then
 fi
 
 echo "hackage: OK (pull: index-tarball sdist cabal-update cabal-get)"
+
+# ------------------------------------------------------------------ hosted --
+# httpcache serves this tree through a HostedHandler, so files publish to
+# _hosted/<repo>/. This tree has NO Generator: it gets index.txt and nothing more.
+# So this asserts that publishing, serving and deleting work - not that
+# a client could consume the tree as a repository, which would need a
+# generator that does not exist.
+echo "== hosted: publish a file =="
+REPO="e2e"
+FN="hackage-index.tar.gz"
+printf 'ez hello hackage hosted\n' > "/tmp/$FN"
+SUM=$(sha256sum "/tmp/$FN" | cut -d' ' -f1)
+code=$(curl -sS -o /tmp/hosted-up.out -w '%{http_code}' -X PUT \
+  --data-binary "@/tmp/$FN" "$BASE/_hosted/$REPO/$FN")
+case "$code" in
+  200|201) echo "   PUT $FN -> $code" ;;
+  *) echo "hackage: the upload failed:" >&2
+     cat /tmp/hosted-up.out >&2 || true
+     exit 1 ;;
+esac
+
+echo "== hosted: it comes back byte-identically =="
+curl -fsS -o "/tmp/$FN.back" "$BASE/_hosted/$REPO/$FN" ||
+  { echo "hackage: the uploaded file is not served back" >&2; exit 1; }
+GOT=$(sha256sum "/tmp/$FN.back" | cut -d' ' -f1)
+[ "$GOT" = "$SUM" ] ||
+  { echo "hackage: served bytes differ ($GOT != $SUM)" >&2; exit 1; }
+echo "   sha256 $SUM matches"
+
+echo "== hosted: the repo has a listing =="
+curl -fsS "$BASE/_hosted/$REPO/index.txt" 2>/dev/null | grep -q "$FN" ||
+  { echo "hackage: index.txt does not list $FN" >&2; exit 1; }
+echo "   index.txt lists $FN"
+
+echo "== hosted: DELETE removes it =="
+code=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$BASE/_hosted/$REPO/$FN")
+case "$code" in
+  200|204)
+    if curl -fsS "$BASE/_hosted/$REPO/$FN" >/dev/null 2>&1; then
+      echo "hackage: the deleted file is still served" >&2; exit 1
+    fi
+    echo "   gone" ;;
+  *) echo "   (DELETE answered $code)" ;;
+esac
+
+echo "hackage: OK (pull: upstream)"
+echo "hackage: OK (hosted: put bytes index-txt delete)"

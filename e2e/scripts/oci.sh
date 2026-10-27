@@ -67,3 +67,128 @@ GOT="sha256:$(sha256sum /tmp/layer | cut -d' ' -f1)"
 GZ=ok
 gzip -t /tmp/layer 2>/dev/null || GZ=not-gzip
 echo "oci: verified $L from the mirror ($(wc -c </tmp/layer) bytes, $GZ)"
+
+# ------------------------------------------------------------------ hosted --
+# OCI HAS a write path: the /v2 API's own push protocol. upload.go handles
+# POST/PUT/DELETE on /blobs/uploads/, manifest.go PUT/DELETE on /manifests/.
+#
+#   POST /v2/<name>/blobs/uploads/        -> 202 + Location
+#   PUT  <Location>?digest=sha256:<hex>   -> 201 (monolithic upload)
+#   PUT  /v2/<name>/manifests/<tag>       -> 201
+#   GET  /v2/<name>/manifests/<tag>       -> the manifest back
+#   GET  /v2/<name>/blobs/sha256:<hex>    -> the blob back, digest verified
+echo "== hosted: push a blob and a manifest =="
+REPO="easyblobs-e2e/hello"
+TAG="1.0.0"
+
+printf 'ez hello oci layer\n' > /tmp/oci-layer
+LAYER_SUM="sha256:$(sha256sum /tmp/oci-layer | cut -d' ' -f1)"
+LAYER_SIZE=$(wc -c < /tmp/oci-layer)
+
+printf '{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":["%s"]}}' \
+  "$LAYER_SUM" > /tmp/oci-config
+CONFIG_SUM="sha256:$(sha256sum /tmp/oci-config | cut -d' ' -f1)"
+CONFIG_SIZE=$(wc -c < /tmp/oci-config)
+
+echo "   layer  $LAYER_SUM ($LAYER_SIZE bytes)"
+echo "   config $CONFIG_SUM ($CONFIG_SIZE bytes)"
+
+# pushblob <file> <digest>: the POST-then-PUT pair for one blob.
+pushblob() {
+  _file="$1"
+  _digest="$2"
+  _hdr=$(mktemp)
+  wget -qO /dev/null --server-response --timeout=60 --tries=1 \
+    --header="Host: $REGISTRY" --method=POST \
+    "http://$HOST_ADDR/v2/$REPO/blobs/uploads/" 2>"$_hdr" || true
+  _loc=$(grep -i '^ *Location:' "$_hdr" | head -1 | sed 's/^ *[Ll]ocation: *//; s/\r$//')
+  if [ -z "$_loc" ]; then
+    return 1
+  fi
+  case "$_loc" in
+    http*) _url="$_loc" ;;
+    *)     _url="http://$HOST_ADDR$_loc" ;;
+  esac
+  wget -qO /dev/null --server-response --timeout=60 --tries=1 \
+    --header="Host: $REGISTRY" \
+    --header='Content-Type: application/octet-stream' \
+    --method=PUT --body-file="$_file" \
+    "$_url?digest=$_digest" 2>&1 | grep -o '[0-9][0-9][0-9]' | head -1
+}
+
+code=$(pushblob /tmp/oci-layer "$LAYER_SUM")
+echo "   PUT layer -> ${code:-<none>}"
+case "$code" in
+  200|201|202) ;;
+  *) echo "oci: pushing the layer failed" >&2; exit 1 ;;
+esac
+
+code=$(pushblob /tmp/oci-config "$CONFIG_SUM")
+echo "   PUT config -> ${code:-<none>}"
+case "$code" in
+  200|201|202) ;;
+  *) echo "oci: pushing the config failed" >&2; exit 1 ;;
+esac
+
+{
+  printf '{"schemaVersion":2,'
+  printf '"mediaType":"application/vnd.oci.image.manifest.v1+json",'
+  printf '"config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"%s","size":%s},' \
+    "$CONFIG_SUM" "$CONFIG_SIZE"
+  printf '"layers":[{"mediaType":"application/vnd.oci.image.layer.v1.tar","digest":"%s","size":%s}]}' \
+    "$LAYER_SUM" "$LAYER_SIZE"
+} > /tmp/oci-manifest
+
+code=$(wget -qO /dev/null --server-response --timeout=60 --tries=1 \
+  --header="Host: $REGISTRY" \
+  --header='Content-Type: application/vnd.oci.image.manifest.v1+json' \
+  --method=PUT --body-file=/tmp/oci-manifest \
+  "http://$HOST_ADDR/v2/$REPO/manifests/$TAG" 2>&1 |
+  grep -o '[0-9][0-9][0-9]' | head -1)
+echo "   PUT manifest -> ${code:-<none>}"
+case "$code" in
+  200|201|202) ;;
+  *) echo "oci: pushing the manifest failed" >&2; exit 1 ;;
+esac
+
+echo "== hosted: the tag is advertised =="
+TAGS=$(fetch "/v2/$REPO/tags/list")
+printf '%s' "$TAGS" | grep -q "$TAG" ||
+  { echo "oci: the pushed tag is not in the tag list: $TAGS" >&2; exit 1; }
+echo "   /tags/list names $TAG"
+
+echo "== hosted: the manifest comes back =="
+BACKM=$(fetch "/v2/$REPO/manifests/$TAG" \
+  --header='Accept: application/vnd.oci.image.manifest.v1+json')
+printf '%s' "$BACKM" | grep -q "$LAYER_SUM" ||
+  { echo "oci: the served manifest does not reference the pushed layer" >&2; exit 1; }
+echo "   the manifest references $LAYER_SUM"
+
+echo "== hosted: the blob comes back and its digest matches =="
+wget -qO /tmp/oci-back --timeout=60 --tries=1 --header="Host: $REGISTRY" \
+  "http://$HOST_ADDR/v2/$REPO/blobs/$LAYER_SUM" ||
+  { echo "oci: the pushed blob is not served back" >&2; exit 1; }
+GOTB="sha256:$(sha256sum /tmp/oci-back | cut -d' ' -f1)"
+[ "$GOTB" = "$LAYER_SUM" ] ||
+  { echo "oci: served blob digest $GOTB != $LAYER_SUM" >&2; exit 1; }
+cmp -s /tmp/oci-back /tmp/oci-layer ||
+  { echo "oci: the served blob differs from the pushed one" >&2; exit 1; }
+echo "   bytes match and the digest verifies"
+
+echo "== hosted: DELETE the manifest =="
+code=$(wget -qO /dev/null --server-response --timeout=60 --tries=1 \
+  --header="Host: $REGISTRY" --method=DELETE \
+  "http://$HOST_ADDR/v2/$REPO/manifests/$TAG" 2>&1 |
+  grep -o '[0-9][0-9][0-9]' | head -1)
+case "$code" in
+  200|202|204)
+    echo "   deleted"
+    if printf '%s' "$(fetch "/v2/$REPO/tags/list")" | grep -q "$TAG"; then
+      echo "oci: the deleted tag is still advertised" >&2; exit 1
+    fi
+    echo "   gone from /tags/list" ;;
+  *) echo "   (DELETE answered $code)" ;;
+esac
+
+echo "oci: OK (pull: manifest-list manifest layer-digest)"
+echo "oci: OK (hosted: push-blobs push-manifest tags manifest-bytes delete)"

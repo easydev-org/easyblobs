@@ -59,19 +59,19 @@ composer	ubuntu-latest	hosted	composer + php via ramsey/composer-install / setup
 hex	ubuntu-latest	hosted	mix via erlef/setup-beam	elixir erlang
 pub	ubuntu-latest	hosted	dart via dart-lang/setup-dart	dart
 juliapkg	ubuntu-latest	hosted	julia via julia-actions/setup-julia	julia
-hackage	ubuntu-latest	pull-only	cabal via haskell-actions/setup	ghc cabal
-stackage	ubuntu-latest	pull-only	cabal via haskell-actions/setup	ghc cabal
-opam	ubuntu-latest	pull-only	opam via ocaml/setup-ocaml	opam
-pecl	ubuntu-latest	pull-only	pecl via shivammathur/setup-php	php
+hackage	ubuntu-latest	hosted	cabal via haskell-actions/setup	ghc cabal
+stackage	ubuntu-latest	hosted	cabal via haskell-actions/setup	ghc cabal
+opam	ubuntu-latest	hosted	opam via ocaml/setup-ocaml	opam
+pecl	ubuntu-latest	hosted	pecl via shivammathur/setup-php	php
 cpan	ubuntu-latest	hosted	cpanm via shogo82148/actions-setup-perl	perl
 nix	ubuntu-latest	hosted	nix via cachix/install-nix-action	nix
-luarocks	ubuntu-latest	pull-only	luarocks via leafo/gh-actions-luarocks	lua luarocks
+luarocks	ubuntu-latest	hosted	luarocks via leafo/gh-actions-luarocks	lua luarocks
 nuget	ubuntu-latest	hosted	dotnet via actions/setup-dotnet	dotnet
 conda	ubuntu-latest	hosted	conda via conda-incubator/setup-miniconda	micromamba
 protobuf	ubuntu-latest	hosted	buf via bufbuild/buf-setup-action	buf
 cran	ubuntu-latest	hosted	R via r-lib/actions/setup-r	r
 swift	ubuntu-latest	hosted	swiftc via swift-actions/setup-swift	swift
-jenkins	ubuntu-latest	pull-only	jenkins-plugin-cli (jar fetched in the job) + setup-java	java jenkins
+jenkins	ubuntu-latest	hosted	jenkins-plugin-cli (jar fetched in the job) + setup-java	java jenkins
 
 # --- distro package managers: these NEED their own userland ---
 apk	container:alpine:3.20	pull-only	apk(8) exists only on Alpine	
@@ -80,6 +80,9 @@ rpm	container:fedora:41	hosted	dnf tests THIS distro's repomd metadata
 
 # --- protocols whose client is plain HTTP by nature ---
 netcache	ubuntu-latest	pull-only	curl IS the client (raw HTTP cache semantics)	
-oci	ubuntu-latest	pull-only	wget speaks the OCI /v2 protocol (no docker daemon needed)	
+oci	ubuntu-latest	hosted	wget speaks the OCI /v2 protocol (no docker daemon needed)	
+
+
+
 
 
