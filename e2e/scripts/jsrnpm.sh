@@ -50,11 +50,16 @@ print((entry.get("dist") or {}).get("tarball") or "")
 PYEOF
 )
 if [ -n "$TB" ]; then
-  # The advertised URL is absolute and points at the upstream host; rewrite its
-  # origin to the mount so the fetch goes through the mirror, which is the round
-  # trip under test.
-  REL=$(printf '%s' "$TB" | sed 's|^https\?://[^/]*||')
-  curl -fsS -o "$WORK/pkg.tgz" "$BASE$REL" || fail "the advertised tarball is not fetchable through the mount"
+  # The adapter REWRITES dist.tarball to point back at itself, so the URL the
+  # packument carries is already the one a client should fetch - that rewrite is
+  # part of what makes the mirror usable. Fetch it verbatim.
+  #
+  # The previous version stripped the origin and re-prefixed $BASE, which
+  # produced <base>/artifacts/npm/... twice:
+  #   .../artifacts/npm/_upstream/npm.jsr.io/artifacts/npm/_upstream/...
+  # and 404ed on a URL of my own making.
+  curl -fsS -o "$WORK/pkg.tgz" "$TB" ||
+    fail "the advertised tarball is not fetchable: $TB"
   tar -tzf "$WORK/pkg.tgz" >/dev/null 2>&1 || fail "the tarball is not a gzipped tar"
   echo "   fetched and verified the advertised tarball"
 else
