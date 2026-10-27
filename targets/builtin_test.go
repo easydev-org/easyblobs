@@ -37,6 +37,7 @@ var legacyDefaults = map[string]string{
 	"nix":      "https://cache.nixos.org",
 	"protobuf": "https://buf.build",
 	"gitlfs":   "",
+	"arch":     "https://geo.mirror.pkgbuild.com",
 
 	"opam":     "https://opam.ocaml.org",
 	"stackage": "https://stackage.org",

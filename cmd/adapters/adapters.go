@@ -10,6 +10,7 @@ import (
 	_ "github.com/easydev-org/easyblobs/conan"
 	_ "github.com/easydev-org/easyblobs/conda"
 	_ "github.com/easydev-org/easyblobs/debian"
+	_ "github.com/easydev-org/easyblobs/arch"
 	_ "github.com/easydev-org/easyblobs/generic"
 	_ "github.com/easydev-org/easyblobs/gitlfs"
 	_ "github.com/easydev-org/easyblobs/go"

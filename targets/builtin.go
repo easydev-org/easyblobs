@@ -123,6 +123,11 @@ func Builtins() []Target {
 		// System package repositories.
 		{ID: "apk", Protocol: "apk", Kind: Mirror, Base: "https://dl-cdn.alpinelinux.org",
 			Hosts: []string{"dl-cdn.alpinelinux.org"}, Builtin: true},
+		// Arch's mirrors all serve the same /<repo>/os/<arch>/ layout, so one
+		// target with the official mirror as its base covers them; a specific
+		// mirror can be selected per repository through the upstream table.
+		{ID: "arch", Protocol: "arch", Kind: Mirror, Base: "https://geo.mirror.pkgbuild.com",
+			Hosts: []string{"geo.mirror.pkgbuild.com", "mirror.rackspace.com", "mirrors.kernel.org"}, Builtin: true},
 		{
 			ID: "debian", Protocol: "debian", Kind: Mirror,
 			Base:    "https://deb.debian.org",
