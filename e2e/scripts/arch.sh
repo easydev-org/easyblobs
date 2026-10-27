@@ -235,6 +235,10 @@ if curl -fsS -o "$WORK/hdb2.bin" "$BASE/_hosted/e2e/$REPO/os/$ARCHN/$REPO.db.tar
 fi
 
 echo "== hosted: install it back from the hosted repo =="
+echo "   (the package on disk: $(wc -c < "$WORK/$FN") bytes)"
+zstd -dc "$WORK/$FN" 2>/dev/null | tar -tvf - 2>/dev/null | head -8 | awk '{print "     " $1, $3, $6}' ||
+  echo "     (could not list members)"
+
 ROOT2="$WORK/root2"
 DBPATH2="$WORK/db2"
 CACHE2="$WORK/cache2"
