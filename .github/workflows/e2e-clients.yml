@@ -501,9 +501,16 @@ jobs:
             apk add --no-cache shadow 2>/dev/null || true
           elif command -v pacman >/dev/null; then
             # makepkg is the reference builder for a .pkg.tar.zst, the same way
-            # dpkg-deb and rpmbuild are used for theirs. It arrives with
-            # pacman itself; shadow gives the suite useradd.
-            pacman -Sy --noconfirm --needed pacman shadow 2>/dev/null || true
+            # dpkg-deb and rpmbuild are used for theirs. It needs more than the
+            # pacman package:
+            #   ERROR: Cannot find the debugedit binary required for including
+            #          source files in debug packages.
+            #   ERROR: Cannot find the fakeroot binary.
+            # fakeroot gives an unprivileged user a root-looking filesystem for
+            # the packaging step; debugedit is needed to strip debug paths.
+            # shadow supplies useradd, which makepkg's root check forces on us.
+            pacman -Sy --noconfirm --needed pacman shadow fakeroot debugedit \
+              2>/dev/null || true
           elif command -v dnf >/dev/null; then
             dnf install -y -q rpm-build 2>/dev/null || true
           elif command -v apt-get >/dev/null; then
