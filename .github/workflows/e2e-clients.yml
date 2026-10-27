@@ -445,10 +445,14 @@ jobs:
     needs: [server, matrix]
     runs-on: ubuntu-latest
     env:
-      # PULL: apk/apt/dnf install from the mount is a pull-through by nature -
-      # the mount fetches from the distro's repository and caches it. These have
-      # no hosted fixture (you cannot publish an .deb through them this way).
-      E2E_DIRECTION: pull
+      # The direction comes from the matrix row. It used to be hardcoded to
+      # pull with the note "you cannot publish an .deb through them this way",
+      # which is wrong: debian and rpm both have a HostedHandler, both GENERATE
+      # their index from what was uploaded (GeneratePackages / GenerateRepodata),
+      # and both suites already publish a real .deb/.rpm under _hosted, install
+      # it back and run the installed binary. apk stays pull because its hosted
+      # install is a documented PARTIAL (abuild is not on PATH).
+      E2E_DIRECTION: ${{ matrix.direction }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.matrix.outputs.distro) }}

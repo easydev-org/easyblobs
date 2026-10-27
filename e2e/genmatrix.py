@@ -78,7 +78,16 @@ def main():
             image = runner.split(":", 1)[1].strip()
             if not image:
                 raise SystemExit(f"genmatrix: container row without an image: {proto}")
-            distro.append({"protocol": proto, "image": image})
+            # The distro row keeps its direction. The job used to hardcode
+            # E2E_DIRECTION=pull, so a container protocol that can publish
+            # (debian, rpm - both have HostedHandler and generate their own
+            # index) could never have a hosted run: the marker was read here and
+            # then thrown away.
+            # ci-run.sh takes "pull" / "hosted" / "build"; the TSV says
+            # "pull-only" for the same thing. Translate once, here, so the
+            # workflow can pass the value straight through.
+            wire = "pull" if direction == "pull-only" else direction
+            distro.append({"protocol": proto, "image": image, "direction": wire})
         elif runner == "ubuntu-latest":
             app.append({"protocol": proto, "tools": tools})
             # The hosted matrix is the subset that has a fixture to publish with.
