@@ -153,8 +153,17 @@ if [ -f "$SRVLOG" ]; then
   before=$(wc -l < "$SRVLOG")
 fi
 
-if DENO_REGISTRY_URL="$BASE/_hosted/e2e" \
-   deno run -q "$WORK/hosted.ts" >/tmp/jsr-hosted.log 2>&1; then
+# DENO_REGISTRY_URL was a guess and the server log proved it wrong: during the
+# previous run NOT ONE request reached the mount, so deno went to jsr.io. Ask
+# deno what it supports rather than guessing a third time - `deno --help` lists
+# the JSR flags, and DENO_LOG=debug prints every fetch it attempts.
+echo "jsr: deno's own JSR options:"
+deno --help 2>&1 | grep -iE 'jsr|registry' | head -6 | sed 's/^/   /'
+echo "jsr: environment variables deno documents:"
+deno --help 2>&1 | grep -oE 'DENO_[A-Z_]+|JSR_[A-Z_]+' | sort -u | head -12 | sed 's/^/   /'
+
+if DENO_REGISTRY_URL="$BASE/_hosted/e2e" DENO_LOG=debug \
+   deno run -q --reload "$WORK/hosted.ts" >/tmp/jsr-hosted.log 2>&1; then
   cat /tmp/jsr-hosted.log | sed 's/^/   /'
   grep -q "ez hello" /tmp/jsr-hosted.log ||
     fail "deno installed the package but its function did not run"
