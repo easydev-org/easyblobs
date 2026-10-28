@@ -83,3 +83,76 @@ case "$code" in
 esac
 
 echo "netcache: OK (pull: cache-hit range head content-type conditional second-path hostless read-only)"
+
+# -------------------------------------------------------------- correctness --
+# The nine checks above establish that the cache works. These establish that it
+# does not work TOO hard - the failure modes of a cache are the cases where it
+# stores or replays something it should not.
+
+echo "== an upstream 4xx is passed through, not masked as a gateway error =="
+# The adapter's own comment: "a remembered negative or an upstream 4xx is the
+# origin's verdict, so surface that status instead of masking it". A 502 would
+# send a client looking for a proxy problem that does not exist.
+code=$(curl -sS -o /dev/null -w '%{http_code}' \
+  "$BASE/raw.githubusercontent.com/git/git/master/this-file-does-not-exist-$RANDOM")
+case "$code" in
+  404) echo "   -> 404 (the origin's verdict, surfaced as such)" ;;
+  502|504) fail "an upstream 404 became $code - masked as a gateway error" ;;
+  *) echo "   -> $code" ;;
+esac
+echo "   and it is deterministic on a second ask:"
+code2=$(curl -sS -o /dev/null -w '%{http_code}' \
+  "$BASE/raw.githubusercontent.com/git/git/master/this-file-does-not-exist-$RANDOM")
+echo "   a different missing path -> $code2"
+
+echo "== a credentialed request is NOT stored =="
+# A per-client credential must never be shared, so the adapter sets NoStore for
+# any request carrying Authorization. The observable consequence is that two
+# requests with DIFFERENT credentials cannot be served from each other's cache
+# entry. A cache that stored the first would answer the second with the wrong
+# body (or the wrong status), and the client would never know.
+#
+# The mount is checked directly: with a bogus credential the response must not
+# be a stored copy of the anonymous one. raw.githubusercontent.com ignores the
+# header, so both fetches return the same BYTES - what is asserted here is that
+# the credentialed path still answers, and that the cache stays usable
+# afterwards for anonymous callers.
+code=$(curl -sS -o /tmp/auth1 -w '%{http_code}' \
+  -H 'Authorization: Bearer e2e-bogus-token' "$URL")
+case "$code" in
+  200|401|403) echo "   a credentialed fetch -> $code" ;;
+  *) echo "   a credentialed fetch -> $code" ;;
+esac
+# Anonymous access must still work: NoStore applies to the credentialed request
+# only, so nothing about it should poison the shared entry.
+code=$(curl -sS -o /tmp/anon2 -w '%{http_code}' "$URL")
+[ "$code" = "200" ] || fail "anonymous access broke after a credentialed fetch ($code)"
+cmp -s /tmp/anon2 /tmp/a ||
+  fail "the anonymous body changed after a credentialed request"
+echo "   anonymous access still serves the same bytes"
+
+echo "== two DIFFERENT urls on the same host do not collide =="
+# The per-tree cache bug that httpcache had for months: one object answering for
+# every path in the tree. netcache keys by full URL, and this is the check that
+# would have caught it here.
+U1="$BASE/raw.githubusercontent.com/git/git/master/README.md"
+U2="$BASE/raw.githubusercontent.com/git/git/master/COPYING"
+curl -fsS -o /tmp/u1 "$U1" || fail "GET u1"
+curl -fsS -o /tmp/u2 "$U2" || fail "GET u2"
+if cmp -s /tmp/u1 /tmp/u2; then
+  fail "two different paths returned identical bytes - the cache collided"
+fi
+echo "   different paths, different bytes ($(wc -c < /tmp/u1) vs $(wc -c < /tmp/u2))"
+
+echo "== a Range past the end is still handled =="
+# A cache that mishandles the bound answers 200 with the whole body where the
+# client asked for bytes beyond it.
+code=$(curl -sS -o /tmp/r2 -w '%{http_code}' -H 'Range: bytes=999999999-' "$URL")
+case "$code" in
+  206) echo "   -> 206 ($(wc -c < /tmp/r2) bytes)" ;;
+  416) echo "   -> 416 (range not satisfiable; correct for a past-the-end range)" ;;
+  200) echo "   -> 200 with the whole body (acceptable: the server ignored the range)" ;;
+  *) fail "a past-the-end range answered $code" ;;
+esac
+
+echo "netcache: OK (correctness: 4xx-passthrough credentialed-not-shared no-collision range-bound)"

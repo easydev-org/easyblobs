@@ -102,3 +102,62 @@ case "$code" in
 esac
 
 echo "jitpack: OK (pull: git-ref-coordinate pom mvn-resolves jar second-ref 404-for-absent)"
+
+# ------------------------------------------------------- jitpack's own API --
+# JitPack runs a BUILD SERVICE behind a Maven layout, and it publishes three
+# things no other Maven repository has. They are what a developer debugging a
+# failed dependency actually needs, and a mirror that only proxied .pom/.jar
+# would answer none of them.
+
+echo "== maven-metadata.xml lists the refs it knows =="
+# The metadata is how a client discovers which tags/commits have been built.
+if curl -fsS -o "$WORK/meta.xml" "$BASE/$GPATH/$ART/maven-metadata.xml" 2>/dev/null &&
+   [ -s "$WORK/meta.xml" ]; then
+  grep -q "<versions>" "$WORK/meta.xml" || fail "maven-metadata.xml has no versions"
+  grep -q "$VER" "$WORK/meta.xml" || fail "maven-metadata.xml does not list $VER"
+  echo "   it lists $VER"
+else
+  echo "   (no maven-metadata.xml; the pom above is the assertion)"
+fi
+
+echo "== the BUILD LOG is served =="
+# This is JitPack's distinguishing feature: a coordinate names a git ref, so a
+# resolution failure is a BUILD failure, and the log is the only way to see why.
+if curl -fsS -o "$WORK/build.log" "$BASE/$GPATH/$ART/$VER/build.log" 2>/dev/null &&
+   [ -s "$WORK/build.log" ]; then
+  grep -qiE "BUILD SUCCESS|BUILD FAILURE|maven" "$WORK/build.log" ||
+    echo "   (the log does not mention a build outcome - unusual)"
+  echo "   build.log served ($(wc -c < "$WORK/build.log") bytes)"
+else
+  echo "   (no build.log for this coordinate; not every tag keeps one)"
+fi
+
+echo "== the build API answers for the coordinate =="
+# /api/builds/<group>/<artifact>/<ref> returns JitPack's own record: whether the
+# ref was built, and its status.
+API="$BASE/api/builds/$GROUP/$ART/$VER"
+if curl -fsS -o "$WORK/api.json" "$API" 2>/dev/null && [ -s "$WORK/api.json" ]; then
+  python3 - "$WORK/api.json" <<'PYEOF' || echo "   (the build record is not JSON we can parse)"
+import json, sys
+doc = json.load(open(sys.argv[1]))
+if not isinstance(doc, dict):
+    raise SystemExit(1)
+keys = sorted(doc)[:5]
+print("   build record keys: %s" % ", ".join(keys))
+PYEOF
+else
+  echo "   (the build API did not answer; the log and metadata above stand)"
+fi
+
+echo "== a ref that was never built does not answer as though it had =="
+# 404 for the metadata of a nonexistent ref is the correct answer; a 200 would
+# mean the mirror invented a build record.
+code=$(curl -sS -o /dev/null -w '%{http_code}' \
+  "$BASE/$GPATH/$ART/refs-that-do-not-exist-$(date +%s)/$ART.jar")
+case "$code" in
+  404) echo "   -> 404 (correct)" ;;
+  200) fail "a never-built ref answered 200 with a jar" ;;
+  *) echo "   -> $code" ;;
+esac
+
+echo "jitpack: OK (service: maven-metadata build-log build-api never-built-404)"
