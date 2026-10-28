@@ -61,7 +61,6 @@ juliapkg	ubuntu-latest	hosted	julia via julia-actions/setup-julia	julia
 hackage	ubuntu-latest	hosted	cabal via haskell-actions/setup	ghc cabal
 stackage	ubuntu-latest	hosted	cabal via haskell-actions/setup	ghc cabal
 opam	ubuntu-latest	hosted	opam via ocaml/setup-ocaml	opam
-pecl	ubuntu-latest	hosted	pecl via shivammathur/setup-php (easysetup publishes a pecl setup file but not its tarball)	php
 cpan	ubuntu-latest	hosted	cpanm via shogo82148/actions-setup-perl	perl
 nix	ubuntu-latest	hosted	nix via cachix/install-nix-action	nix
 luarocks	ubuntu-latest	hosted	luarocks via leafo/gh-actions-luarocks	lua luarocks

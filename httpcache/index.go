@@ -21,7 +21,6 @@ import (
 //	cpan     -> modules/02packages.details.txt.gz     "Module Version Path" lines
 //	luarocks -> manifest-5.4                          a Lua manifest (best effort)
 //	opam     -> repo (index)                           a minimal listing
-//	pecl     -> (no standard index)                    a plain listing
 //	others   -> (no index)                             a plain listing at /index.txt
 //
 // A tree with no machine-readable index still gets a plain "/index.txt" listing

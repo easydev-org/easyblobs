@@ -9,7 +9,7 @@ IMAGE="${IMAGE:-forgejo.develop.10.199.64.20.nip.io/easy-platform/artifact:lates
 UPSTREAM_PROXY="${UPSTREAM_PROXY:-http://mihomo.develop.svc.cluster.local:7890}"
 NAME="${NAME:-artifact-unified}"
 # Protocol list mirrors run.sh's default matrix.
-PROTOCOLS="${PROTOCOLS:-npm pypi go cargo maven nuget rubygems composer hex pub helm conan swift conda nix huggingface protobuf debian apk rpm oci git ivy hackage cran cpan luarocks juliapkg google gradle clojars spring jitpack jsr jsrnpm opam stackage pecl bazel jenkins gitlfs netcache system}"
+PROTOCOLS="${PROTOCOLS:-npm pypi go cargo maven nuget rubygems composer hex pub helm conan swift conda nix huggingface protobuf debian apk rpm oci git ivy hackage cran cpan luarocks juliapkg google gradle clojars spring jitpack jsrnpm opam stackage bazel jenkins gitlfs netcache system}"
 
 # proto_mount maps an e2e row onto the artifact adapter that serves it
 # (mirrors ride an existing adapter), so --protocols lists distinct adapters.

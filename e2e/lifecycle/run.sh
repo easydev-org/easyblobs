@@ -61,7 +61,7 @@ proto_img() {
     jsrnpm)  echo "${TOOL_IMAGE_PREFIX}-npm:${TOOL_TAG}" ;;
     jsr)     echo "${TOOL_IMAGE_PREFIX}-haskell:${TOOL_TAG}" ;;
     gitlfs)  echo "${TOOL_IMAGE_PREFIX}-gitlfs:${TOOL_TAG}" ;;
-    opam|stackage|pecl|bazel|jenkins) echo "${TOOL_IMAGE_PREFIX}-haskell:${TOOL_TAG}" ;;
+    opam|stackage|bazel|jenkins) echo "${TOOL_IMAGE_PREFIX}-haskell:${TOOL_TAG}" ;;
     netcache) echo "${TOOL_IMAGE_PREFIX}-git:${TOOL_TAG}" ;;
     rpm|apk|nix) echo "${TOOL_IMAGE_PREFIX}-$p:latest" ;;
     *)       echo "${TOOL_IMAGE_PREFIX}-$p:${TOOL_TAG}" ;;

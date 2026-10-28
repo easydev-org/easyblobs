@@ -46,6 +46,15 @@ import (
 //   - aur     the Arch User Repository: /rpc/v5/{info,search}, /cgit/aur.git/
 //             {plain/PKGBUILD,snapshot/<pkg>.tar.gz} and /packages.gz.
 //
+// PECL is deliberately NOT here. pecl.php.net has no repository protocol worth
+// naming: it serves a tgz at /get/<ext>-<ver>.tgz and a REST description, with
+// no index to generate and no publish API (extensions are released by emailing
+// pecl-dev, then reviewed by hand). Caching it is "proxy a website", which any
+// generic proxy does; testing it as a protocol only tested HTTP file transfer.
+// C extensions in practice come from the distro (apt install php-redis), not
+// from pecl, and `composer` is the PHP ecosystem's real package manager. pecl
+// was removed rather than kept as a suite that proved nothing.
+//
 // AUR is READ-ONLY here on purpose. Its publish direction is an SSH git push to
 // aur@aur.archlinux.org, which has no self-hosted equivalent and no HTTP
 // endpoint - so there is nothing for a hosted repository to stand in for. What
@@ -69,7 +78,7 @@ import (
 // tested as such.
 var trees = []string{
 	"hackage", "cran", "cpan", "luarocks", "juliapkg",
-	"opam", "stackage", "pecl", "bazel", "jenkins", "aur",
+	"opam", "stackage", "bazel", "jenkins", "aur",
 }
 
 type State struct {

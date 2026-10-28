@@ -8,7 +8,7 @@ name: e2e-clients
 #                  step is `if:`-guarded on the protocol, so a job installs only
 #                  the one toolchain it needs. This covers every
 #                  application-level client (npm, pip, gem, cargo, mvn, cabal,
-#                  opam, php/pecl, perl, deno, bazel, nix, lua, dotnet, conda,
+#                  opam, php, perl, deno, bazel, nix, lua, dotnet, conda,
 #                  buf, R, swift, mix, dart, julia, helm, go).
 #
 #   distro-clients the three DISTRO package managers, which need their own

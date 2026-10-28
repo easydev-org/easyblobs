@@ -26,7 +26,7 @@ TOOL_IMAGE_PREFIX="${TOOL_IMAGE_PREFIX:-forgejo.develop.10.199.64.20.nip.io/easy
 TOOL_TAG="${TOOL_TAG:-latest}"
 # Each protocol uses its dedicated client image (toolchain/e2e: one image per
 # protocol, built from official/prebuilt tarballs under /opt).
-PROTOCOLS=(${PROTOCOLS:-npm pypi go cargo maven nuget rubygems composer hex pub helm conan swift conda nix huggingface protobuf debian apk rpm oci git ivy hackage cran cpan luarocks juliapkg google gradle clojars spring jitpack jsr jsrnpm opam stackage pecl bazel jenkins gitlfs netcache})
+PROTOCOLS=(${PROTOCOLS:-npm pypi go cargo maven nuget rubygems composer hex pub helm conan swift conda nix huggingface protobuf debian apk rpm oci git ivy hackage cran cpan luarocks juliapkg google gradle clojars spring jitpack jsrnpm opam stackage bazel jenkins gitlfs netcache})
 KEEP="${KEEP:-0}"
 # JOBS is the number of protocols exercised concurrently (each has its own
 # pod, so they are independent). JOBS=1 reproduces the old serial behavior.
@@ -87,7 +87,7 @@ proto_img() {
     jsrnpm)  echo "${TOOL_IMAGE_PREFIX}-npm:${TOOL_TAG}" ;;
     jsr)     echo "${TOOL_IMAGE_PREFIX}-haskell:${TOOL_TAG}" ;;
     gitlfs)  echo "${TOOL_IMAGE_PREFIX}-gitlfs:${TOOL_TAG}" ;;
-    opam|stackage|pecl|bazel|jenkins) echo "${TOOL_IMAGE_PREFIX}-haskell:${TOOL_TAG}" ;;
+    opam|stackage|bazel|jenkins) echo "${TOOL_IMAGE_PREFIX}-haskell:${TOOL_TAG}" ;;
     netcache) echo "${TOOL_IMAGE_PREFIX}-git:${TOOL_TAG}" ;;
     rpm|apk|nix) echo "${TOOL_IMAGE_PREFIX}-$p:latest" ;;
     *)       echo "${TOOL_IMAGE_PREFIX}-$p:${TOOL_TAG}" ;;

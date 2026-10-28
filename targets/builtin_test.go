@@ -42,7 +42,6 @@ var legacyDefaults = map[string]string{
 
 	"opam":     "https://opam.ocaml.org",
 	"stackage": "https://stackage.org",
-	"pecl":     "https://pecl.php.net",
 	"bazel":    "https://bcr.bazel.build",
 	"jenkins":  "https://updates.jenkins.io",
 

@@ -173,8 +173,6 @@ func Builtins() []Target {
 			Hosts: []string{"opam.ocaml.org"}, Builtin: true},
 		{ID: "stackage", Protocol: "stackage", Kind: Mirror, Base: "https://stackage.org",
 			Hosts: []string{"stackage.org"}, Builtin: true},
-		{ID: "pecl", Protocol: "pecl", Kind: Mirror, Base: "https://pecl.php.net",
-			Hosts: []string{"pecl.php.net"}, Builtin: true},
 		{ID: "bazel", Protocol: "bazel", Kind: Mirror, Base: "https://bcr.bazel.build",
 			Hosts: []string{"bcr.bazel.build"}, Builtin: true},
 		{ID: "jenkins", Protocol: "jenkins", Kind: Mirror, Base: "https://updates.jenkins.io",
