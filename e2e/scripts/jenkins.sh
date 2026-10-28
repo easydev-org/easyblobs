@@ -32,7 +32,7 @@ python3 - "$JENKINS_UC" <<'PY'
 import json, sys, urllib.request, zipfile, io, urllib.parse
 base = sys.argv[1].rstrip("/")
 def get(path):
-    with urllib.request.urlopen(base + path, timeout=120) as r:
+    with urllib.request.urlopen(base + path, timeout=300) as r:
         return r.read()
 uc = get("/update-center.json")
 text = uc.decode("utf-8", "replace")
@@ -105,7 +105,11 @@ echo "jenkins: OK (hosted: put bytes index-txt delete)"
 # and fail any build that pins a plugin version - which is most of them.
 
 echo "== the update centre advertises a plugin with a concrete version =="
-curl -fsS -o /tmp/uc.json "$BASE/update-center.json" ||
+# Fetched with a long timeout and ONCE: the pull half above already pulled this
+# document through the mirror, and updates.jenkins.io has been slow enough to
+# time out at 120s. A second unconditional fetch here turned a slow origin into
+# a failure that had nothing to do with the mirror.
+curl -fsS --max-time 300 -o /tmp/uc.json "$BASE/update-center.json" ||
   { echo "jenkins: could not fetch update-center.json" >&2; exit 1; }
 
 # Jenkins wraps the document in a JSONP callback, so the balanced object is

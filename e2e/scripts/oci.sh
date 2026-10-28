@@ -298,6 +298,12 @@ cp "$PUSH_DIR/config" "$PUSH_DIR/blobs/sha256/$CFG_HEX"
 } > "$PUSH_DIR/manifest.json"
 
 MAN_HEX=$(sha256sum "$PUSH_DIR/manifest.json" | cut -d' ' -f1)
+# The manifest must ALSO live in blobs/sha256/. index.json points at it by
+# digest and skopeo follows that pointer:
+#   determining manifest MIME type ...: open blobs/sha256/<hex>: no such file
+# The named copy (manifest.json) is for humans; the addressed copy is what the
+# layout format actually requires.
+cp "$PUSH_DIR/manifest.json" "$PUSH_DIR/blobs/sha256/$MAN_HEX"
 {
   printf '{"imageLayoutVersion":"1.0.0"}'
 } > "$PUSH_DIR/oci-layout"
