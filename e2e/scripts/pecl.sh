@@ -76,12 +76,32 @@ if command -v pecl >/dev/null 2>&1; then
     echo "   (could not repoint the channel's REST base)"
   fi
 
+  # `pecl remote-info` CANNOT be pointed at the mount, and that is a property of
+  # the client rather than of the mirror:
+  #
+  #   WARNING: channel "pecl.php.net" has updated its protocols ...
+  #   Unknown package: "redis" in channel "pecl.php.net"
+  #   Debug: Connection to `ssl://pecl.php.net:443' failed: Unable to find the
+  #          socket transport "ssl" - did you forget to enable it when you
+  #          configured PHP?
+  #
+  # pear resolves the extension through a CHANNEL, and a channel is a DNS name
+  # with a protocol handshake; `pear channel-set <ch> rest <url>` does not
+  # override where the channel itself lives. The php in this toolchain also has
+  # no ssl transport, so even the real host is unreachable from it.
+  #
+  # So the assertion here is the one that is actually TRUE: pecl exists and can
+  # be invoked, and the REST documents it would consume are served correctly -
+  # asserted directly below. What is NOT claimed is that `pecl` performs the
+  # protocol against this mirror.
   if pecl remote-info redis >/tmp/pecl-remote.log 2>&1; then
     head -6 /tmp/pecl-remote.log | sed 's/^/   /'
     echo "   pecl read the extension's metadata through the mount"
   else
-    echo "   pecl remote-info did not complete (the REST assertions below stand):"
-    tail -6 /tmp/pecl-remote.log | sed 's/^/     /'
+    echo "   pecl remote-info cannot reach a mirror: pear resolves through a"
+    echo "   channel bound to a DNS name and a TLS handshake (see comment above)."
+    echo "   The client is present; the REST documents below are asserted directly."
+    grep -m2 -E "Unknown package|ssl" /tmp/pecl-remote.log | sed 's/^/     /'
   fi
 else
   echo "== pecl is not installed; the REST and archive paths are asserted directly =="
