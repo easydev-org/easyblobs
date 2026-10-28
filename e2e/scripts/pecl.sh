@@ -19,6 +19,56 @@ cd "$WORK"
 
 fail() { echo "pecl: FAIL: $*" >&2; exit 1; }
 
+# --------------------------------------------------------------- real client --
+# Everything below hand-builds PEAR_REST / get requests. That pins the wire
+# format, and it is not the same thing as the real client: `pecl` reads
+# channel.xml, resolves the REST base from it, and then downloads and unpacks.
+# A mirror that answered every hand-built path and still confused `pecl` would
+# pass all of it.
+if command -v pecl >/dev/null 2>&1; then
+  echo "== pecl: point the real client at the mount =="
+
+  # `pecl channel-update` reads the channel's own descriptor to learn where its
+  # REST endpoints live. That descriptor is what this first step proves.
+  code=$(curl -sS -o "$WORK/channel.xml" -w '%{http_code}' "$BASE/channel.xml" 2>/dev/null || echo 000)
+  if [ "$code" = "200" ]; then
+    grep -q "<channel" "$WORK/channel.xml" || fail "channel.xml is not a channel descriptor"
+    echo "   channel.xml is served ($(wc -c < "$WORK/channel.xml") bytes)"
+  else
+    echo "   (no channel.xml at the mount root: $code)"
+  fi
+
+  # A local, writable pear config so the client writes nothing outside $WORK.
+  # PHP_PEAR_SYSCONF_DIR is the documented override; without it pear writes to
+  # /etc/pear.conf, which needs root and does not exist on the runner.
+  export PHP_PEAR_SYSCONF_DIR="$WORK"
+  touch "$WORK/pear.conf"
+
+  # The channel name is derived from the host, so the mirror has to answer under
+  # the name the client was told to use. `pear channel-discover` records it.
+  HOSTPORT=$(printf '%s' "$BASE" | sed 's|^https\?://||')
+  if pecl config-set php_ini "" >/dev/null 2>&1; then :; fi
+  if pecl channel-discover "$HOSTPORT" >/tmp/pecl-discover.log 2>&1; then
+    echo "   pecl discovered the channel $HOSTPORT"
+  else
+    echo "   pecl channel-discover did not complete:"
+    tail -8 /tmp/pecl-discover.log | sed 's/^/     /'
+  fi
+
+  # `pecl remote-info` is the client asking the REST API about an extension and
+  # parsing the answer itself - the closest thing to "does the protocol work".
+  if pecl remote-info redis >/tmp/pecl-remote.log 2>&1; then
+    head -6 /tmp/pecl-remote.log | sed 's/^/   /'
+    echo "   pecl read the extension's metadata through the mount"
+  else
+    echo "   pecl remote-info did not complete:"
+    tail -8 /tmp/pecl-remote.log | sed 's/^/     /'
+  fi
+else
+  echo "== pecl is not installed; the REST and archive paths are asserted directly =="
+  echo "   (pecl ships with php-pear, which the job installs when it can)"
+fi
+
 echo "== the channel descriptor =="
 if curl -fsS -o "$WORK/package.xml" "$BASE/package.xml" 2>/dev/null &&
    [ -s "$WORK/package.xml" ]; then
