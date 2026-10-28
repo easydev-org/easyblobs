@@ -345,11 +345,12 @@ else
        >/tmp/skopeo-push.log 2>&1; then
     fail "an ANONYMOUS skopeo push succeeded - the mirror must not allow that"
   fi
-  grep -qiE "unauthorized|insufficient scopes|authentication required" \
-    /tmp/skopeo-push.log ||
-    { echo "oci: the anonymous push failed for an unexpected reason:" >&2
-      tail -20 /tmp/skopeo-push.log >&2
-      fail "anonymous push" }
+  if ! grep -qiE "unauthorized|insufficient scopes|authentication required" \
+       /tmp/skopeo-push.log; then
+    echo "oci: the anonymous push failed for an unexpected reason:" >&2
+    tail -20 /tmp/skopeo-push.log >&2
+    fail "anonymous push"
+  fi
   echo "   an anonymous push was refused (401, as designed)"
   echo "   (no EASYBLOBS_TOKEN in this job, so the push SUCCESS path is not"
   echo "    exercised; the hand-built PUTs above cover the write route)"
