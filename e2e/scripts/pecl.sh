@@ -41,28 +41,47 @@ if command -v pecl >/dev/null 2>&1; then
   # A local, writable pear config so the client writes nothing outside $WORK.
   # PHP_PEAR_SYSCONF_DIR is the documented override; without it pear writes to
   # /etc/pear.conf, which needs root and does not exist on the runner.
+  #
+  # Do NOT touch a pear.conf here. An EMPTY file is not an empty config - pear
+  # reads it and refuses:
+  #   ERROR: The default config file is not a valid config file or is corrupted.
+  # The directory alone is what pear wants; it creates its own file.
   export PHP_PEAR_SYSCONF_DIR="$WORK"
-  touch "$WORK/pear.conf"
 
-  # The channel name is derived from the host, so the mirror has to answer under
-  # the name the client was told to use. `pear channel-discover` records it.
+  # `pecl channel-discover` is INFORMATIONAL here, not an assertion. It registers
+  # a named channel with pear, and pear derives that name from a real DNS host
+  # with a REST layout at /rest - neither of which a bare 127.0.0.1:8080 mount
+  # provides. Failing the suite on it would be asserting a naming convention
+  # rather than the protocol.
+  #
+  # What actually matters is below: the client reading the REST API itself.
   HOSTPORT=$(printf '%s' "$BASE" | sed 's|^https\?://||')
-  if pecl config-set php_ini "" >/dev/null 2>&1; then :; fi
   if pecl channel-discover "$HOSTPORT" >/tmp/pecl-discover.log 2>&1; then
     echo "   pecl discovered the channel $HOSTPORT"
   else
-    echo "   pecl channel-discover did not complete:"
-    tail -8 /tmp/pecl-discover.log | sed 's/^/     /'
+    echo "   (channel-discover needs a DNS-named host; informational only)"
+    tail -3 /tmp/pecl-discover.log | sed 's/^/     /'
   fi
 
-  # `pecl remote-info` is the client asking the REST API about an extension and
-  # parsing the answer itself - the closest thing to "does the protocol work".
+  # `pecl remote-info` is the client reading the REST API and parsing the answer
+  # itself - the closest thing to "does the protocol work". It resolves the REST
+  # base from the channel's OWN config, so the channel's rest/baseurl has to be
+  # pointed at the mount first. `pear config-set` writes into the sysconf dir,
+  # which is ours.
+  PCL_CHANNEL="pecl.php.net"
+  if pecl config-set "default_channel" "$PCL_CHANNEL" >/dev/null 2>&1 &&
+     pear channel-set "$PCL_CHANNEL" rest "$BASE/rest" >/dev/null 2>&1; then
+    echo "   channel $PCL_CHANNEL rest base -> $BASE/rest"
+  else
+    echo "   (could not repoint the channel's REST base)"
+  fi
+
   if pecl remote-info redis >/tmp/pecl-remote.log 2>&1; then
     head -6 /tmp/pecl-remote.log | sed 's/^/   /'
     echo "   pecl read the extension's metadata through the mount"
   else
-    echo "   pecl remote-info did not complete:"
-    tail -8 /tmp/pecl-remote.log | sed 's/^/     /'
+    echo "   pecl remote-info did not complete (the REST assertions below stand):"
+    tail -6 /tmp/pecl-remote.log | sed 's/^/     /'
   fi
 else
   echo "== pecl is not installed; the REST and archive paths are asserted directly =="
