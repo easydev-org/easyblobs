@@ -94,7 +94,7 @@ echo "== an upstream 4xx is passed through, not masked as a gateway error =="
 # origin's verdict, so surface that status instead of masking it". A 502 would
 # send a client looking for a proxy problem that does not exist.
 code=$(curl -sS -o /dev/null -w '%{http_code}' \
-  "$BASE/raw.githubusercontent.com/git/git/master/this-file-does-not-exist-$RANDOM")
+  "$BASE/raw.githubusercontent.com/git/git/master/this-file-does-not-exist-$(date +%s%N)")
 case "$code" in
   404) echo "   -> 404 (the origin's verdict, surfaced as such)" ;;
   502|504) fail "an upstream 404 became $code - masked as a gateway error" ;;
@@ -102,7 +102,7 @@ case "$code" in
 esac
 echo "   and it is deterministic on a second ask:"
 code2=$(curl -sS -o /dev/null -w '%{http_code}' \
-  "$BASE/raw.githubusercontent.com/git/git/master/this-file-does-not-exist-$RANDOM")
+  "$BASE/raw.githubusercontent.com/git/git/master/this-file-does-not-exist-$(date +%s%N)")
 echo "   a different missing path -> $code2"
 
 echo "== a credentialed request is NOT stored =="
