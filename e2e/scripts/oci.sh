@@ -16,8 +16,15 @@ set -e
 HOST_ADDR=$(printf '%s' "$EASYBLOBS_URL" | sed 's|https\?://||; s|/.*||')
 REGISTRY="${OCI_REGISTRY:-registry-1.docker.io}"
 
-OCI_DIR=$(mktemp -d)
-trap 'rm -rf "$OCI_DIR"' EXIT
+# skopeo refuses to write into a directory that already exists and is not an
+# image layout:
+#   initializing destination dir:/tmp/...: not a containers image directory,
+#   don't want to overwrite
+# mktemp -d creates exactly that, so the paths skopeo writes are named beneath a
+# scratch root and must NOT exist yet.
+OCI_SCRATCH=$(mktemp -d)
+OCI_DIR="$OCI_SCRATCH/pulled"
+trap 'rm -rf "$OCI_SCRATCH"' EXIT
 
 # --------------------------------------------------------------- real client --
 # skopeo is the OCI client that needs NO daemon - which is the whole reason it
@@ -264,8 +271,10 @@ echo "== skopeo: push a locally-built image TO the mount =="
 # Build an image layout locally, then push it. Doing it this way means skopeo
 # owns the whole upload dance - POST, PUT blob, PUT blob, PUT manifest - which
 # is what the adapter's write path exists to serve.
-PUSH_DIR=$(mktemp -d)
-trap 'rm -rf "$OCI_DIR" "$PUSH_DIR"' EXIT
+# Same rule as the pull: the layout directory must not pre-exist, so it is named
+# under the scratch root and created by mkdir (not by mktemp) at the moment the
+# blobs are laid out.
+PUSH_DIR="$OCI_SCRATCH/pushed"
 mkdir -p "$PUSH_DIR/blobs/sha256"
 printf 'ez hello oci push layer\n' > "$PUSH_DIR/layer"
 LAYER_HEX=$(sha256sum "$PUSH_DIR/layer" | cut -d' ' -f1)
@@ -308,8 +317,7 @@ else
 fi
 
 echo "== and pulls its own push back =="
-BACK_DIR=$(mktemp -d)
-trap 'rm -rf "$OCI_DIR" "$PUSH_DIR" "$BACK_DIR"' EXIT
+BACK_DIR="$OCI_SCRATCH/back"
 if skopeo copy --retry-times 1 --dest-tls-verify=false --src-tls-verify=false \
      "docker://docker.io/easyblobs-e2e/skopeo:1.0" "oci:$BACK_DIR:roundtrip" \
      >/tmp/skopeo-back.log 2>&1; then
