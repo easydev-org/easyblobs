@@ -109,8 +109,21 @@ echo "== the update centre advertises a plugin with a concrete version =="
 # document through the mirror, and updates.jenkins.io has been slow enough to
 # time out at 120s. A second unconditional fetch here turned a slow origin into
 # a failure that had nothing to do with the mirror.
-curl -fsS --max-time 300 -o /tmp/uc.json "$BASE/update-center.json" ||
-  { echo "jenkins: could not fetch update-center.json" >&2; exit 1; }
+# updates.jenkins.io has timed out twice in CI, so this retries rather than
+# turning a slow origin into a red job about the mirror. Three attempts with a
+# long per-attempt timeout.
+UC_OK=0
+for attempt in 1 2 3; do
+  if curl -fsS --max-time 180 -o /tmp/uc.json "$BASE/update-center.json" &&
+     [ -s /tmp/uc.json ]; then
+    UC_OK=1
+    break
+  fi
+  echo "   (update-center.json attempt $attempt did not answer; retrying)"
+  sleep 5
+done
+[ "$UC_OK" = "1" ] ||
+  { echo "jenkins: update-center.json did not answer after 3 attempts" >&2; exit 1; }
 
 # Jenkins wraps the document in a JSONP callback, so the balanced object is
 # taken rather than "everything from the first brace" - the trailing ");" was
