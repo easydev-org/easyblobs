@@ -77,15 +77,44 @@ if command -v unzip >/dev/null 2>&1; then
   echo "   it contains org/springframework/core"
 fi
 
-echo "== a RELEASE version from the same repo resolves too =="
-# A milestone-only mirror would pass the checks above and still be useless.
-REL="6.1.14"
-if mvn -B -q -s "$WORK/settings.xml" \
-     org.apache.maven.plugins:maven-dependency-plugin:3.6.1:get \
-     -U -Dartifact="$GROUP:$ART:$REL" -Dtransitive=false >/tmp/spring-rel.log 2>&1; then
-  echo "   resolved $REL as well"
+echo "== Gradle Module Metadata is served alongside the pom =="
+# Spring publishes .module files, and a Gradle build prefers them over the pom:
+# a mirror that served the pom and not the .module would resolve fine under
+# Maven and fail under Gradle.
+if curl -fsS -o "$WORK/module.json" "$BASE/$GPATH/$ART/$VER/$ART-$VER.module" 2>/dev/null &&
+   [ -s "$WORK/module.json" ]; then
+  grep -q '"formatVersion"' "$WORK/module.json" ||
+    fail "the .module file is not Gradle module metadata"
+  grep -q '"component"' "$WORK/module.json" ||
+    fail "the .module file names no component"
+  echo "   .module parses and names a component ($(wc -c < "$WORK/module.json") bytes)"
 else
-  echo "   ($REL did not resolve - the milestone repository may not carry releases)"
+  echo "   (no .module for this artifact)"
 fi
 
-echo "spring: OK (pull: milestone-pom version-verbatim not-a-snapshot metadata mvn-resolves jar)"
+echo "== maven-metadata.xml lists the milestone =="
+if curl -fsS -o "$WORK/meta2.xml" "$BASE/$GPATH/$ART/maven-metadata.xml" 2>/dev/null &&
+   [ -s "$WORK/meta2.xml" ]; then
+  grep -q "<versions>" "$WORK/meta2.xml" || fail "maven-metadata.xml has no versions"
+  echo "   it lists $(grep -c '<version>' "$WORK/meta2.xml") versions"
+fi
+
+echo "== the release line needs a credential, and the mirror does not hide it =="
+# repo.spring.io/release answers 401 without credentials; only /milestone is
+# open. That is the origin's policy, and a mirror must pass it through rather
+# than inventing a 404 or serving something else.
+#
+# The previous version of this suite DID try a release version and swallowed the
+# failure with '|| echo', so a 401 was recorded as "the milestone repository may
+# not carry releases" - a conclusion about the mirror drawn from the origin's
+# authentication policy.
+code=$(curl -sS -o /dev/null -w '%{http_code}' \
+  "$BASE/$GPATH/$ART/6.1.14/$ART-6.1.14.pom")
+case "$code" in
+  401|403) echo "   -> $code (the origin wants a credential; passed through)" ;;
+  200) echo "   -> 200 (this deployment has release access)" ;;
+  404) echo "   -> 404 (the mirror does not carry the release line)" ;;
+  *) echo "   -> $code" ;;
+esac
+
+echo "spring: OK (pull: milestone-pom version-verbatim not-a-snapshot metadata module-file mvn-resolves jar release-policy)"

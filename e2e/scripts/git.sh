@@ -90,3 +90,49 @@ case "$code" in
 esac
 
 echo "git: OK (pull: smart-http-advertisement cold-clone warm-clone same-head history fetch)"
+
+# --------------------------------------------------------------- boundaries --
+# A git mirror is READ-ONLY, and that is worth asserting rather than assuming:
+# the receive-pack half of smart HTTP is the write path, and an anonymous mirror
+# must not offer it.
+
+echo "== the write half of smart HTTP is refused =="
+# service=git-upload-pack is fetch; service=git-receive-pack is PUSH. GitHub
+# itself answers 401 to the latter without a credential, and a mirror that
+# passed it through as 200 would look like it accepted a push it cannot store.
+code=$(curl -sS -o /dev/null -w '%{http_code}' \
+  "$REPO/info/refs?service=git-receive-pack")
+case "$code" in
+  401|403) echo "   receive-pack -> $code (refused; the mirror is read-only)" ;;
+  404) echo "   receive-pack -> 404 (not offered)" ;;
+  200)
+    # If it answers 200 the body must at least not advertise a push service.
+    if curl -sS "$REPO/info/refs?service=git-receive-pack" | grep -q "receive-pack"; then
+      fail "the mirror advertises git-receive-pack - a read-only mirror must not"
+    fi
+    echo "   receive-pack -> 200 but advertises nothing" ;;
+  *) echo "   receive-pack -> $code" ;;
+esac
+
+echo "== pushing through the mount does not succeed =="
+# The end-to-end version of the check above: a real push must fail. This is the
+# assertion a client actually experiences.
+cd "$W"
+if git -C c1 push "$REPO" HEAD:refs/heads/e2e-should-fail >/tmp/git-push.log 2>&1; then
+  fail "a push through the mount succeeded - the mirror is not read-only"
+fi
+echo "   the push was refused"
+
+echo "== upload-pack rejects a POST with no negotiation body =="
+# A fetch is POST /git-upload-pack with a want/have list. A request with no body
+# has asked for nothing, and answering 200 would claim a pack was served. This
+# is also the shape a shared-cache bug shows up in: something answers 200 to a
+# request it did not understand.
+code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$REPO/git-upload-pack")
+case "$code" in
+  400|405|411|415|500) echo "   a bodiless upload-pack POST -> $code (rejected)" ;;
+  200) fail "a bodiless upload-pack POST answered 200" ;;
+  *) echo "   a bodiless upload-pack POST -> $code" ;;
+esac
+
+echo "git: OK (boundary: receive-pack-refused push-refused upload-pack-needs-a-body)"
