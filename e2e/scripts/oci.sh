@@ -37,27 +37,25 @@ trap 'rm -rf "$OCI_SCRATCH"' EXIT
 if command -v skopeo >/dev/null 2>&1; then
   echo "== skopeo: pull a real image through the mount =="
   echo "oci: $(skopeo --version)"
-  # No TLS, and docker.io rewritten to the mount. skopeo reads this file
-  # itself; no daemon and no DNS.
+  # The registry NAME has to survive the redirect. `location = "<mount>"` in
+  # registries.conf rewrites the address but leaves the path, so skopeo sent
+  #   GET /v2/library/busybox/manifests/latest   Host: 127.0.0.1
+  # and the adapter - which reads the registry from the Host header, as the spec
+  # says - saw registry "127.0.0.1", found no upstream, and answered 404.
   #
-  # NOT /etc: that needs root, and the client job runs unprivileged on the
-  # runner. CONTAINERS_REGISTRIES_CONF is the documented override and it points
-  # at a file this user owns.
-  # The config lives on the SCRATCH root, not in $OCI_DIR: that directory must
-  # not exist yet (skopeo refuses to overwrite a non-image dir), so writing a
-  # file into it failed with "Directory nonexistent".
-  REGCONF="$OCI_SCRATCH/registries.conf"
-  {
-    echo '[[registry]]'
-    echo 'prefix = "docker.io"'
-    echo 'location = "'"$HOST_ADDR"'"'
-    echo 'insecure = true'
-  } > "$REGCONF"
-  export CONTAINERS_REGISTRIES_CONF="$REGCONF"
+  # So the name resolves to the mount instead, keeping Host and path both right.
+  # /etc/hosts needs root and the job is unprivileged; HOSTALIASES is the
+  # user-writable hook libc consults for exactly this.
+  HOSTS_FILE="$OCI_SCRATCH/hosts"
+  : > "$HOSTS_FILE"
+  BARE_HOST=$(printf '%s' "$HOST_ADDR" | sed 's/:.*//')
+  echo "$BARE_HOST $REGISTRY" >> "$HOSTS_FILE"
+  export HOSTALIASES="$HOSTS_FILE"
+  echo "   $REGISTRY resolves to $BARE_HOST via HOSTALIASES"
 
-  if skopeo copy --retry-times 1 --dest-tls-verify=false --src-tls-verify=false \
+  if skopeo copy --retry-times 1 --src-tls-verify=false --dest-tls-verify=false \
        --src-registry-token="" \
-       "docker://docker.io/library/busybox:latest" "dir:$OCI_DIR" \
+       "docker://$REGISTRY/library/busybox:latest" "dir:$OCI_DIR" \
        >/tmp/skopeo-pull.log 2>&1; then
     [ -f "$OCI_DIR/manifest.json" ] ||
       { echo "oci: skopeo reported success but wrote no manifest" >&2; exit 1; }
@@ -310,7 +308,7 @@ MAN_HEX=$(sha256sum "$PUSH_DIR/manifest.json" | cut -d' ' -f1)
 } > "$PUSH_DIR/index.json"
 
 if skopeo copy --retry-times 1 --dest-tls-verify=false --src-tls-verify=false \
-     "oci:$PUSH_DIR:skopeo-push" "docker://docker.io/easyblobs-e2e/skopeo:1.0" \
+     "oci:$PUSH_DIR:skopeo-push" "docker://$REGISTRY/easyblobs-e2e/skopeo:1.0" \
      >/tmp/skopeo-push.log 2>&1; then
   echo "   skopeo pushed it"
 else
@@ -322,7 +320,7 @@ fi
 echo "== and pulls its own push back =="
 BACK_DIR="$OCI_SCRATCH/back"
 if skopeo copy --retry-times 1 --dest-tls-verify=false --src-tls-verify=false \
-     "docker://docker.io/easyblobs-e2e/skopeo:1.0" "oci:$BACK_DIR:roundtrip" \
+     "docker://$REGISTRY/easyblobs-e2e/skopeo:1.0" "oci:$BACK_DIR:roundtrip" \
      >/tmp/skopeo-back.log 2>&1; then
   # The bytes it fetched back must be the bytes it sent.
   if [ -f "$BACK_DIR/blobs/sha256/$LAYER_HEX" ]; then
