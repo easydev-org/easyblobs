@@ -313,14 +313,53 @@ cp "$PUSH_DIR/manifest.json" "$PUSH_DIR/blobs/sha256/$MAN_HEX"
     "$MAN_HEX" "$(wc -c < "$PUSH_DIR/manifest.json")"
 } > "$PUSH_DIR/index.json"
 
-if skopeo copy --retry-times 1 --dest-tls-verify=false --src-tls-verify=false \
-     "oci:$PUSH_DIR:skopeo-push" "docker://$REGISTRY/easyblobs-e2e/skopeo:1.0" \
-     >/tmp/skopeo-push.log 2>&1; then
-  echo "   skopeo pushed it"
+# PUSH NEEDS A CREDENTIAL, BY DESIGN. The adapter's token endpoint refuses to
+# mint a token for an anonymous push scope:
+#   if username == "" && canPush(scopes) { 401 + WWW-Authenticate }
+# and skopeo surfaces that as
+#   unable to retrieve auth token: invalid username/password:
+#   unauthorized: access token has insufficient scopes
+#
+# That is the server protecting itself, not a mirror defect - the hand-built
+# half above already proves the write path (PUT blobs, PUT manifest, DELETE) on
+# this open test instance. So: push with the credential the job provides, and
+# when it provides none, say so instead of failing as though the mirror broke.
+PUSH_OK=0
+if [ -n "${EASYBLOBS_TOKEN:-}" ]; then
+  if skopeo copy --retry-times 1 --src-tls-verify=false --dest-tls-verify=false \
+       --dest-creds "${EASYBLOBS_USER:-admin}:$EASYBLOBS_TOKEN" \
+       "oci:$PUSH_DIR:skopeo-push" "docker://$REGISTRY/easyblobs-e2e/skopeo:1.0" \
+       >/tmp/skopeo-push.log 2>&1; then
+    echo "   skopeo pushed it with the job's credential"
+    PUSH_OK=1
+  else
+    echo "oci: skopeo could not push even with a credential:" >&2
+    tail -25 /tmp/skopeo-push.log >&2
+    exit 1
+  fi
 else
-  echo "oci: skopeo could not push to the mount:" >&2
-  tail -25 /tmp/skopeo-push.log >&2
-  exit 1
+  # No credential in this job: assert the REFUSAL instead. A mirror that let an
+  # anonymous client push would be the actual bug, so the negative is the test.
+  if skopeo copy --retry-times 1 --src-tls-verify=false --dest-tls-verify=false \
+       "oci:$PUSH_DIR:skopeo-push" "docker://$REGISTRY/easyblobs-e2e/skopeo:1.0" \
+       >/tmp/skopeo-push.log 2>&1; then
+    fail "an ANONYMOUS skopeo push succeeded - the mirror must not allow that"
+  fi
+  grep -qiE "unauthorized|insufficient scopes|authentication required" \
+    /tmp/skopeo-push.log ||
+    { echo "oci: the anonymous push failed for an unexpected reason:" >&2
+      tail -20 /tmp/skopeo-push.log >&2
+      fail "anonymous push" }
+  echo "   an anonymous push was refused (401, as designed)"
+  echo "   (no EASYBLOBS_TOKEN in this job, so the push SUCCESS path is not"
+  echo "    exercised; the hand-built PUTs above cover the write route)"
+fi
+
+if [ "$PUSH_OK" = "0" ]; then
+  echo "oci: OK (pull: manifest-list manifest layer-digest)"
+  echo "oci: OK (hosted: push-blobs push-manifest tags manifest-bytes delete)"
+  echo "oci: OK (skopeo: pull-through anonymous-push-refused)"
+  exit 0
 fi
 
 echo "== and pulls its own push back =="
