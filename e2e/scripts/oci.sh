@@ -43,7 +43,10 @@ if command -v skopeo >/dev/null 2>&1; then
   # NOT /etc: that needs root, and the client job runs unprivileged on the
   # runner. CONTAINERS_REGISTRIES_CONF is the documented override and it points
   # at a file this user owns.
-  REGCONF="$OCI_DIR/registries.conf"
+  # The config lives on the SCRATCH root, not in $OCI_DIR: that directory must
+  # not exist yet (skopeo refuses to overwrite a non-image dir), so writing a
+  # file into it failed with "Directory nonexistent".
+  REGCONF="$OCI_SCRATCH/registries.conf"
   {
     echo '[[registry]]'
     echo 'prefix = "docker.io"'
