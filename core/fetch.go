@@ -184,6 +184,8 @@ func (r *Registry) fetchAbsolute(ctx context.Context, url, wantDigest string, te
 	// the whole object still lands in the CAS and a teed client is not truncated.
 	// A fresh client over the same transport follows redirects (the shared
 	// client's CheckRedirect stops at the first hop).
+	// Keep the guarded transport: a redirect target must be validated exactly
+	// like the original destination.
 	followClient := &http.Client{Transport: remote.client.Transport}
 	body, err := openResumable(ctx, followClient, url, remote.headers)
 	if err != nil {
