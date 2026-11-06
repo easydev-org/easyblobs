@@ -47,7 +47,10 @@ func (f *ClientFactory) Client(proxy *string) *http.Client {
 		return c
 	}
 	c := &http.Client{
-		Transport: newTransport(proxy),
+		// Every request's DESTINATION is checked (see guardedTransport): the
+		// syntactic host check cannot see a name that resolves to a private
+		// address.
+		Transport: guardTransport(newTransport(proxy)),
 		// No overall Timeout: large blobs stream for minutes.
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -73,7 +76,9 @@ func (f *ClientFactory) Redirecting(proxy *string) *http.Client {
 	if c, ok := f.clients[key]; ok {
 		return c
 	}
-	c := &http.Client{Transport: newTransport(proxy)}
+	// Guarded too: Go re-enters RoundTrip for EACH redirect hop, so a public
+	// host that 302s to a private one is refused on the second hop.
+	c := &http.Client{Transport: guardTransport(newTransport(proxy))}
 	f.clients[key] = c
 	return c
 }

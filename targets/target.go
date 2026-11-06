@@ -124,17 +124,44 @@ func SplitID(id string) (proto, name string) {
 }
 
 // IsPublicHost reports whether host is a public DNS name: dotted, not an IP
-// literal, not localhost, not a cluster-local name. It is the SSRF guard: a
-// host that fails it must never be used as an upstream source.
+// literal, not localhost, not a cluster-local name. It is the SSRF guard for a
+// host named in the REQUEST, which must never become an upstream source unless
+// it is a plainly public name.
+//
+// It is a SYNTACTIC guard and deliberately strict: anything it does not
+// POSITIVELY recognise as a public DNS name is refused. That is the only safe
+// default for a value that ends up in an outbound URL — an allow-list of bad
+// shapes can never be complete.
+//
+// Shapes it refuses, each of which a looser check (a suffix test on the raw
+// string) let through in production:
+//
+//	evil.com:pass@127.0.0.1   userinfo: the URL parser connects to 127.0.0.1
+//	127.0.0.1.nip.io          a wildcard DNS name that RESOLVES to loopback
+//	foo.svc.cluster.local.    a trailing dot defeated the ".cluster.local" suffix
+//	0x7f.0.0.1, 127.1, 0177.0.0.1   alternate IPv4 spellings
+//	a..b, ., .., -        not valid DNS at all
+//
+// Note that a syntactic check cannot catch a wildcard DNS name that resolves to
+// a private address; that is the resolver's job (see core's dial guard), and
+// the two together are what make the guard meaningful.
 func IsPublicHost(host string) bool {
 	h := strings.ToLower(strings.TrimSpace(host))
 	if h == "" {
+		return false
+	}
+	// Reject userinfo outright: "user:pass@host" is not a host, and passing it
+	// through means whoever parses it next decides what to connect to.
+	if strings.Contains(h, "@") {
 		return false
 	}
 	if hostOnly, _, err := net.SplitHostPort(h); err == nil {
 		h = hostOnly
 	}
 	h = strings.Trim(h, "[]")
+	// A trailing dot is a valid FQDN root marker, and "svc.cluster.local." must
+	// not slip past the suffix checks below.
+	h = strings.TrimSuffix(h, ".")
 	if h == "" || h == "localhost" {
 		return false
 	}
@@ -142,11 +169,60 @@ func IsPublicHost(host string) bool {
 		return false
 	}
 	switch {
+	case h == "local", h == "internal", h == "svc", h == "cluster":
+		return false
 	case strings.HasSuffix(h, ".local"),
 		strings.HasSuffix(h, ".svc"),
 		strings.HasSuffix(h, ".cluster.local"),
 		strings.HasSuffix(h, ".internal"):
 		return false
 	}
-	return strings.Contains(h, ".")
+	// Must be a syntactically valid dotted DNS name. "a..b", ".", "127.1" and
+	// the hex/octal IPv4 spellings all fail this, which is why the rules below
+	// are about LABELS rather than about "contains a dot".
+	return isDNSName(h)
+}
+
+// isDNSName reports whether h is a dotted name whose labels are all valid
+// (letters, digits, hyphen; not starting or ending with a hyphen; 1..63 long;
+// the last label alphabetic). It refuses numeric-looking TLDs so "127.1",
+// "1.2.3.4" and "0x7f.0.0.1" are not mistaken for hostnames.
+func isDNSName(h string) bool {
+	if len(h) > 253 || !strings.Contains(h, ".") {
+		return false
+	}
+	labels := strings.Split(h, ".")
+	for i, l := range labels {
+		if l == "" || len(l) > 63 {
+			return false
+		}
+		if l[0] == '-' || l[len(l)-1] == '-' {
+			return false
+		}
+		for j := 0; j < len(l); j++ {
+			c := l[j]
+			ok := c == '-' || (c >= '0' && c <= '9') ||
+				(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+			if !ok {
+				return false
+			}
+		}
+		// The TLD must not be all-numeric: "1.2.3.4" / "127.1" are addresses.
+		if i == len(labels)-1 && isAllDigits(l) {
+			return false
+		}
+	}
+	return true
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }

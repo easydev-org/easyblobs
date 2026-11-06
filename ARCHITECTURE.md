@@ -56,8 +56,16 @@ operator-declared targets. Each `Target` carries:
 
 One derived property, **never hand-written**:
 
-- **SSRF guard** — a host named explicitly in the path (netcache / git / ivy)
-  must pass `targets.IsPublicHost` before it is used as an upstream source. An
+- **SSRF guard (two layers)** — a host named explicitly in the request (netcache
+  / git / ivy / `_upstream/<host>/`) must first pass `targets.IsPublicHost`
+  (syntactic: a valid, public dotted name; no userinfo, no trailing dot, no
+  numeric TLD), and then every outbound request's DESTINATION is re-checked after
+  resolution (`easyblobkit.CheckUpstreamHost`, wired into every transport). The
+  second layer is what stops a name that is syntactically public but resolves to a
+  private address (`127.0.0.1.nip.io`), and it applies to each redirect hop
+  because Go re-enters `RoundTrip`. A deployment that genuinely mirrors an
+  internal upstream must opt in explicitly with
+  `EASYBLOBS_ALLOW_PRIVATE_UPSTREAM=1`. An
   upstream base always comes from the target table or a per-repository override,
   **never** from the request Host.
 
